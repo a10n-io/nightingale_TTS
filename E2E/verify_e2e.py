@@ -214,15 +214,13 @@ def verify_stage(swift_output: np.ndarray, python_output: np.ndarray, threshold:
 
 
 def run_swift_verification(test_case: TestCase) -> Tuple[bool, dict]:
-    """Run Swift VerifyLive binary and parse its output."""
-    swift_binary = PROJECT_ROOT / "swift" / "test_scripts" / "VerifyLive" / ".build" / "debug" / "VerifyLive"
+    """Run Swift VerifyLive using swift run (properly handles Metal library resources)."""
+    verify_live_dir = PROJECT_ROOT / "swift" / "test_scripts" / "VerifyLive"
     ref_dir = OUTPUT_DIR / test_case.voice / f"{test_case.sentence_id}_{test_case.language}"
 
-    if not swift_binary.exists():
-        return False, {"error": f"Swift binary not found at {swift_binary}"}
-
+    # Use 'swift run' instead of compiled binary to properly load Metal library resources
     cmd = [
-        str(swift_binary),
+        "swift", "run", "VerifyLive",
         "--voice", test_case.voice,
         "--ref-dir", str(ref_dir),
     ]
@@ -233,7 +231,7 @@ def run_swift_verification(test_case: TestCase) -> Tuple[bool, dict]:
             capture_output=True,
             text=True,
             timeout=300,
-            cwd=str(PROJECT_ROOT / "swift" / "test_scripts" / "VerifyLive")
+            cwd=str(verify_live_dir)
         )
 
         output = result.stdout + result.stderr

@@ -36,10 +36,6 @@ let package = Package(
             name: "LiveFireTest",
             targets: ["LiveFireTest"]
         ),
-        .executable(
-            name: "VerifyLive",
-            targets: ["VerifyLive"]
-        ),
     ],
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.21.0"),
@@ -86,11 +82,6 @@ let package = Package(
             name: "LiveFireTest",
             dependencies: ["Nightingale"],
             path: "test_scripts/LiveFireTest"
-        ),
-        .executableTarget(
-            name: "VerifyLive",
-            dependencies: ["Nightingale"],
-            path: "test_scripts/VerifyLive"
         ),
     ]
 )

@@ -741,102 +741,20 @@ public class UpsampleEncoder: Module {
         print("DEBUG Encoder: After upEmbedNorm"); fflush(stdout)
         eval(h)
         print("DEBUG Encoder: After upEmbedNorm eval, h.shape = \(h.shape)"); fflush(stdout)
-
-        // DEBUG: Check upPosEnc.pe before accessing it
-        print("DEBUG Encoder: Checking upPosEnc state..."); fflush(stdout)
-        print("DEBUG Encoder: upPosEnc.dModel = \(upPosEnc.dModel)"); fflush(stdout)
-        print("DEBUG Encoder: upPosEnc.pe.ndim = \(upPosEnc.pe.ndim)"); fflush(stdout)
-        print("DEBUG Encoder: upPosEnc.pe.shape = \(upPosEnc.pe.shape)"); fflush(stdout)
-        print("DEBUG Encoder: Forcing eval of pe..."); fflush(stdout)
-        eval(upPosEnc.pe)
-        print("DEBUG Encoder: pe eval done, checking range..."); fflush(stdout)
-        let peMin = upPosEnc.pe.min().item(Float.self)
-        let peMax = upPosEnc.pe.max().item(Float.self)
-        print("DEBUG Encoder: upPosEnc.pe range = [\(peMin), \(peMax)]"); fflush(stdout)
-
         eval(h)  // Force eval before upPosEnc
-        print("DEBUG Encoder: h eval done, calling upPosEnc(h)..."); fflush(stdout)
-        EspnetRelPositionalEncoding.posEncDebug = true
-        print("DEBUG Encoder: About to call upPosEnc..."); fflush(stdout)
-        let result = upPosEnc(h)
-        print("DEBUG Encoder: upPosEnc returned, unpacking tuple..."); fflush(stdout)
-        let hUp = result.0
-        print("DEBUG Encoder: hUp unpacked, shape = \(hUp.shape)"); fflush(stdout)
-        let posEmbUp = result.1
-        print("DEBUG Encoder: posEmbUp unpacked, shape = \(posEmbUp.shape)"); fflush(stdout)
-        EspnetRelPositionalEncoding.posEncDebug = false
-        print("DEBUG Encoder: About to eval posEmbUp..."); fflush(stdout)
-        eval(posEmbUp)
-        print("DEBUG Encoder: posEmbUp eval done"); fflush(stdout)
-        print("DEBUG Encoder: About to eval hUp..."); fflush(stdout)
-        eval(hUp)
-        print("DEBUG Encoder: hUp eval done"); fflush(stdout)
-        print("DEBUG Encoder: Synchronizing GPU stream..."); fflush(stdout)
-        Stream.gpu.synchronize()
-        print("DEBUG Encoder: GPU synchronized"); fflush(stdout)
-        print("DEBUG Encoder: CHECKPOINT X - simple print works"); fflush(stdout)
-        print("DEBUG Encoder: CHECKPOINT Y - about to access posEmbUp.shape"); fflush(stdout)
-        let posEmbUpShape = posEmbUp.shape
-        print("DEBUG Encoder: CHECKPOINT Z - posEmbUpShape captured, count = \(posEmbUpShape.count)"); fflush(stdout)
-        // Print shape elements individually to isolate crash
-        print("DEBUG Encoder: shape[0] = \(posEmbUpShape[0])"); fflush(stdout)
-        print("DEBUG Encoder: shape[1] = \(posEmbUpShape[1])"); fflush(stdout)
-        print("DEBUG Encoder: shape[2] = \(posEmbUpShape[2])"); fflush(stdout)
-        print("DEBUG Encoder: About to print success..."); fflush(stdout)
-        Stream.gpu.synchronize()
-        print("DEBUG Encoder: Synced again"); fflush(stdout)
-        Thread.sleep(forTimeInterval: 0.1)
-        print("DEBUG Encoder: After sleep"); fflush(stdout)
-        print("DEBUG Encoder: ABOUT TO ASSIGN h = hUp"); fflush(stdout)
-        // Don't reuse h, use hUp directly for the rest to avoid any variable shadowing issues
-        print("DEBUG Encoder: SKIPPING h = hUp, will use hUp directly"); fflush(stdout)
-        // Capture shape BEFORE extra eval
-        let hUpShapeCaptured = hUp.shape
-        print("DEBUG Encoder: hUpShapeCaptured = \(hUpShapeCaptured)"); fflush(stdout)
-        print("DEBUG Encoder: About to eval hUp again..."); fflush(stdout)
-        eval(hUp)
-        print("DEBUG Encoder: hUp eval done again"); fflush(stdout)
-        print("DEBUG Encoder: hUp.shape (using captured) = \(hUpShapeCaptured)")
-
-        // TEMPORARY: Skip upEncoders and return early to isolate the error
-        print("DEBUG Encoder: EARLY RETURN - skipping upEncoders to isolate error"); fflush(stdout)
-        Stream.gpu.synchronize()
-        print("DEBUG Encoder: Final sync done"); fflush(stdout)
-        return hUp
-
-        // Reassign h to hUp for the rest of the function
+        print("DEBUG Encoder: upPosEnc.pe shape = \(upPosEnc.pe.shape) (should be [1, 9999, 512])")
+        let (hUp, posEmbUp) = upPosEnc(h)
+        eval(posEmbUp)  // Force eval of posEmbUp
+        print("DEBUG Encoder: After upPosEnc, posEmbUp.shape = \(posEmbUp.shape)")
         h = hUp
+        eval(h)  // Force eval before accessing shape
+        print("DEBUG Encoder: Set h = hUp, h.shape = \(h.shape)")
 
         // 6. Up Encoders (with upsampled mask)
-        print("DEBUG Encoder: About to run \(upEncoders.count) upEncoders")
-        print("  h.shape = \(h.shape)")
-        print("  posEmbUp.shape = \(posEmbUp.shape)")
-        print("  mask = \(mask?.shape ?? [0])")
-        Stream.gpu.synchronize()
-        print("DEBUG Encoder: Pre-upEncoders sync done")
-
-        // Verify h dimension before attention
-        if h.shape[2] != 512 {
-            print("❌ ERROR: h has wrong feature dimension! Expected 512, got \(h.shape[2])")
-            print("   This will cause attention shape mismatch!")
-        }
-
-        // Verify posEmbUp dimension
-        if posEmbUp.shape[2] != 512 {
-            print("❌ ERROR: posEmbUp has wrong feature dimension! Expected 512, got \(posEmbUp.shape[2])")
-            print("   This will cause linearPos shape mismatch!")
-        }
-
+        print("DEBUG Encoder: About to run \(upEncoders.count) upEncoders, h.shape = \(h.shape), mask = \(mask?.shape ?? [0])")
         for (i, layer) in upEncoders.enumerated() {
-            print("DEBUG Encoder: Running upEncoder[\(i)] with h.shape=\(h.shape), posEmb.shape=\(posEmbUp.shape)...")
-            // Enable attention debug for first upEncoder
-            if i == 0 {
-                RelPositionMultiHeadAttention.debugEnabled = true
-            }
+            print("DEBUG Encoder: Running upEncoder[\(i)]...")
             h = layer(h, mask: mask, posEmb: posEmbUp)
-            if i == 0 {
-                RelPositionMultiHeadAttention.debugEnabled = false
-            }
             print("DEBUG Encoder: upEncoder[\(i)] done, h.shape = \(h.shape)")
         }
 
@@ -1859,19 +1777,6 @@ public class S3Gen: Module {
     // Python: mx.random.seed(0); self.rand_noise = mx.random.normal((1, 80, 50 * 300))
     public var fixedNoise: MLXArray
 
-    // WORKAROUND: Manual matmul for encoderProj to bypass MLX Linear layer caching bug
-    // The Linear layer fails when called with different input tensors (same shape, same dtype)
-    // This function performs the equivalent: output = input @ weight.T + bias
-    public func applyEncoderProj(_ input: MLXArray) -> MLXArray {
-        let weight = encoderProj.weight  // [80, 512]
-        let weightT = weight.transposed()  // [512, 80]
-        var output = matmul(input, weightT)  // [B, T, 80]
-        if let bias = encoderProj.bias {
-            output = output + bias  // broadcast [80] to [B, T, 80]
-        }
-        return output
-    }
-
     public init(flowWeights: [String: MLXArray], vocoderWeights: [String: MLXArray]?) {
         let config = S3GenConfig()
         self.inputEmbedding = Embedding(embeddingCount: config.vocabSize, dimensions: config.inputDim)
@@ -2055,8 +1960,8 @@ public class S3Gen: Module {
         let h = encoder(x) // [1, 2*T_total, 512]
         print("DEBUG S3Gen: encoder returned, h.shape = \(h.shape)"); fflush(stdout)
         eval(h)
-        print("DEBUG S3Gen: Calling applyEncoderProj to project 512 → 80..."); fflush(stdout)
-        let mu = applyEncoderProj(h) // [1, 2*T_total, 80] - using manual matmul workaround
+        print("DEBUG S3Gen: Calling encoderProj to project 512 → 80..."); fflush(stdout)
+        let mu = encoderProj(h) // [1, 2*T_total, 80]
         print("DEBUG S3Gen: encoderProj returned, mu.shape = \(mu.shape)"); fflush(stdout)
         eval(mu)
         print("TRACE 2: encoder_out (mu) shape=\(mu.shape), range=[\(mu.min().item(Float.self)), \(mu.max().item(Float.self))], mean=\(mu.mean().item(Float.self))"); fflush(stdout)
@@ -2220,7 +2125,7 @@ public class S3Gen: Module {
         let x = inputEmbedding(clippedInputs)
         // Encoder outputs [1, T, 512], need to project to [1, T, 80]
         let h = encoder(x)
-        let mu = applyEncoderProj(h) // using manual matmul workaround
+        let mu = encoderProj(h)
         eval(x); eval(mu)
         return (mu, mu)  // Return mu twice for compatibility (h is no longer separate)
     }
@@ -2309,7 +2214,7 @@ public class S3Gen: Module {
 
         // Encoder outputs [1, T, 512], need to project to [1, T, 80]
         let h = encoder(x)
-        let mu = applyEncoderProj(h) // using manual matmul workaround
+        let mu = encoderProj(h)
         eval(mu)
         print("3. Encoder output (mu): \(mu.shape)")
         print("   Range: [\(mu.min().item(Float.self)), \(mu.max().item(Float.self))]")
@@ -2441,8 +2346,8 @@ public class S3Gen: Module {
         h = MLXArray(hData, hShape)  // Re-upload as fresh tensor with no graph history
         print("DEBUG generateWithMel: h graph severed, shape=\(h.shape)")
 
-        var mu = applyEncoderProj(h) // using manual matmul workaround
-        print("DEBUG generateWithMel: applyEncoderProj returned mu.shape = \(mu.shape)")
+        var mu = encoderProj(h)
+        print("DEBUG generateWithMel: encoderProj returned mu.shape = \(mu.shape)")
 
         // Force CPU roundtrip for mu as well
         let muData = mu.asArray(Float.self)  // Download to CPU
