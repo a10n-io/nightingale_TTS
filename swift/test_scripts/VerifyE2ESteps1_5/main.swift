@@ -256,8 +256,11 @@ do {
     // Load voice data
     let soul_t3 = try NPYLoader.load(contentsOf: voiceURL.appendingPathComponent("soul_t3_256.npy"))
     let t3_cond_tokens = try NPYLoader.load(contentsOf: voiceURL.appendingPathComponent("t3_cond_tokens.npy"))
+    let emotion_adv = try NPYLoader.load(contentsOf: voiceURL.appendingPathComponent("emotion_adv.npy"))
+    let emotionValue = emotion_adv.reshaped([-1]).asArray(Float.self)[0]
     let soul_s3 = try NPYLoader.load(contentsOf: voiceURL.appendingPathComponent("soul_s3_192.npy"))
     let promptTokens = try NPYLoader.load(contentsOf: voiceURL.appendingPathComponent("prompt_token.npy"))
+    print("emotion_adv: \(emotionValue)")
 
     // Load S3Gen model
     let s3genFP16URL = modelsURL.appendingPathComponent("s3gen_fp16.safetensors")
@@ -308,7 +311,7 @@ do {
     let condSpeechEmb = speechEmb + speechPosEmb
     let perceiverOut = t3.perceiver!(condSpeechEmb)
 
-    let emotionValue: Float = 0.5
+    // emotionValue is loaded from NPY file above (not hardcoded 0.5)
     let emotionInput = MLXArray([emotionValue]).reshaped([1, 1, 1])
     let emotionToken = t3.emotionAdvFC!(emotionInput)
 

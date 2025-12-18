@@ -1,0 +1,8 @@
+{
+  "text": "Do you think the model can handle the rising intonation at the end of this sentence?",
+  "voice": "samantha",
+  "language": "en",
+  "sentence_id": "interrogative",
+  "seed": 42,
+  "temperature": 0.001
+}

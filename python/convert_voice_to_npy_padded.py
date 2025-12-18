@@ -41,6 +41,14 @@ def convert_voice_to_npy_padded(pt_path: str, output_dir: str):
     np.save(output_dir / 't3_cond_tokens.npy', cond_tokens)
     print(f"  t3_cond_tokens.npy: {cond_tokens.shape} ({cond_tokens.dtype})")
 
+    # emotion_adv - critical for matching Python output
+    emotion_adv = t3.get('emotion_adv', torch.tensor([[[0.5]]]))
+    if isinstance(emotion_adv, (int, float)):
+        emotion_adv = torch.tensor([[[emotion_adv]]])
+    emotion_adv = emotion_adv.detach().numpy().astype(np.float32)
+    np.save(output_dir / 'emotion_adv.npy', emotion_adv)
+    print(f"  emotion_adv.npy: {emotion_adv.shape} ({emotion_adv.dtype}) value={emotion_adv.flatten()[0]}")
+
     # GEN (S3Gen) components - need padding
     gen = voice['gen']
 

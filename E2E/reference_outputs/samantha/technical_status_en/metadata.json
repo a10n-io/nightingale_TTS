@@ -1,0 +1,9 @@
+{
+  "voice": "samantha",
+  "sentence_id": "technical_status",
+  "text": "Verification protocol initialized. Loading sequence 54-B.",
+  "language": "en",
+  "seed": 42,
+  "temperature": 0.001,
+  "device": "mps"
+}

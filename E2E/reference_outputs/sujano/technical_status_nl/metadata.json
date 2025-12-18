@@ -1,0 +1,9 @@
+{
+  "voice": "sujano",
+  "sentence_id": "technical_status",
+  "text": "Verificatieprotocol ge\u00efnitialiseerd. Sequentie 54-B wordt geladen.",
+  "language": "nl",
+  "seed": 42,
+  "temperature": 0.001,
+  "device": "mps"
+}

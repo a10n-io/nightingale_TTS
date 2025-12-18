@@ -1,0 +1,9 @@
+{
+  "voice": "sujano",
+  "sentence_id": "narrative_flow",
+  "text": "Hoewel de reis lang en moeilijk was, bleven ze lopen, in de hoop een plek te vinden waar de sterren helderder schijnen.",
+  "language": "nl",
+  "seed": 42,
+  "temperature": 0.001,
+  "device": "mps"
+}

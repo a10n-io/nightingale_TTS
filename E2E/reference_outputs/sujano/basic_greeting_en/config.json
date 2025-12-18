@@ -1,0 +1,8 @@
+{
+  "text": "Hello world.",
+  "voice": "sujano",
+  "language": "en",
+  "sentence_id": "basic_greeting",
+  "seed": 42,
+  "temperature": 0.001
+}

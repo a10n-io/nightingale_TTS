@@ -1,0 +1,9 @@
+{
+  "voice": "samantha",
+  "sentence_id": "narrative_flow",
+  "text": "Even though the journey was long and difficult, they kept walking, hoping to find a place where the stars shine brighter.",
+  "language": "en",
+  "seed": 42,
+  "temperature": 0.001,
+  "device": "mps"
+}
