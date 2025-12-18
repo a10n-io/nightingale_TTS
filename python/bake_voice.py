@@ -2,17 +2,30 @@
 """
 Bake voice embeddings from reference audio for Chatterbox Multilingual TTS.
 This pre-computes all voice embeddings at full precision for faster inference.
+
+Usage:
+    python bake_voice.py --voice samantha
+    python bake_voice.py --voice sujano --exag 0.5
 """
 
 import torch
 import librosa
 from pathlib import Path
+import argparse
 from chatterbox.mtl_tts import ChatterboxMultilingualTTS
 
+# Parse arguments
+parser = argparse.ArgumentParser(description="Bake voice embeddings from reference audio")
+parser.add_argument("--voice", "-v", required=True,
+                    help="Voice name (e.g., 'samantha', 'sujano'). Will use baked_voices/{name}/ref_audio.wav")
+parser.add_argument("--exag", "-e", type=float, default=0.5,
+                    help="Exaggeration parameter (default: 0.5)")
+args = parser.parse_args()
+
 # Paths
-REF_AUDIO = "/Users/a10n/Projects/nightingale_TTS/baked_voices/ref_audio.wav"
-OUTPUT_DIR = Path("/Users/a10n/Projects/nightingale_TTS/baked_voices")
-OUTPUT_FILE = OUTPUT_DIR / "baked_voice.pt"
+VOICE_DIR = Path(f"/Users/a10n/Projects/nightingale_TTS/baked_voices/{args.voice}")
+REF_AUDIO = VOICE_DIR / "ref_audio.wav"
+OUTPUT_FILE = VOICE_DIR / "baked_voice.pt"
 
 # Automatically detect the best available device
 if torch.cuda.is_available():
@@ -25,26 +38,26 @@ else:
 print(f"Using device: {device}")
 
 # Check reference audio
-ref_path = Path(REF_AUDIO)
-if not ref_path.exists():
+if not REF_AUDIO.exists():
     raise FileNotFoundError(f"Reference audio not found: {REF_AUDIO}")
 
 # Get audio duration
-wav, sr = librosa.load(REF_AUDIO, sr=None)
+wav, sr = librosa.load(str(REF_AUDIO), sr=None)
 duration = len(wav) / sr
 print(f"Reference audio: {REF_AUDIO}")
 print(f"Duration: {duration:.2f}s")
 print(f"Sample rate: {sr}Hz")
 
-# Load model
-print("\nLoading Chatterbox Multilingual TTS...")
-model = ChatterboxMultilingualTTS.from_pretrained(device=device)
+# Load model from local directory
+MODEL_DIR = "/Users/a10n/Projects/nightingale_TTS/models/chatterbox"
+print(f"\nLoading Chatterbox Multilingual TTS from: {MODEL_DIR}")
+model = ChatterboxMultilingualTTS.from_local(MODEL_DIR, device=device)
 print("Model loaded successfully")
 
-# Bake voice embeddings at full precision (exaggeration=0.5 is default)
+# Bake voice embeddings at full precision
 print(f"\nBaking voice embeddings from reference audio...")
-print("This will use full length and full precision")
-model.prepare_conditionals(REF_AUDIO, exaggeration=0.5)
+print(f"Exaggeration: {args.exag}")
+model.prepare_conditionals(str(REF_AUDIO), exaggeration=args.exag)
 
 # Save the baked voice conditionals
 print(f"\nSaving baked voice to: {OUTPUT_FILE}")

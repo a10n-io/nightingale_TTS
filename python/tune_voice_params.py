@@ -5,12 +5,23 @@ Chatterbox has several parameters that affect voice similarity:
 - exaggeration: Controls expressiveness (0.0-1.0, default 0.5)
 - cfg_weight: Classifier-free guidance weight (0.0-1.0, default 0.5)
 - temperature: Sampling temperature (default 0.8)
+
+Usage:
+    python tune_voice_params.py --voice samantha
+    python tune_voice_params.py --voice sujano
 """
 
 import torch
 import torchaudio as ta
 from pathlib import Path
+import argparse
 from chatterbox.mtl_tts import ChatterboxMultilingualTTS
+
+# Parse arguments
+parser = argparse.ArgumentParser(description="Test parameter combinations for voice matching")
+parser.add_argument("--voice", "-v", required=True,
+                    help="Voice name (e.g., 'samantha', 'sujano'). Will use baked_voices/{name}/ref_audio.wav")
+args = parser.parse_args()
 
 # Automatically detect the best available device
 if torch.cuda.is_available():
@@ -22,13 +33,23 @@ else:
 
 print(f"Using device: {device}")
 
-REF_AUDIO = "/Users/a10n/Projects/nightingale_TTS/baked_voices/ref_audio.wav"
-OUTPUT_DIR = Path("/Users/a10n/Projects/nightingale_TTS/baked_voices/tuning")
-OUTPUT_DIR.mkdir(exist_ok=True)
+# Voice-specific paths
+VOICE_DIR = Path(f"/Users/a10n/Projects/nightingale_TTS/baked_voices/{args.voice}")
+REF_AUDIO = VOICE_DIR / "ref_audio.wav"
+OUTPUT_DIR = VOICE_DIR / "tuning"
 
-# Load model
-print("Loading Chatterbox Multilingual TTS...")
-model = ChatterboxMultilingualTTS.from_pretrained(device=device)
+if not REF_AUDIO.exists():
+    print(f"Error: Reference audio not found at: {REF_AUDIO}")
+    exit(1)
+
+OUTPUT_DIR.mkdir(exist_ok=True)
+print(f"Voice: {args.voice}")
+print(f"Reference audio: {REF_AUDIO}")
+
+# Load model from local directory
+MODEL_DIR = "/Users/a10n/Projects/nightingale_TTS/models/chatterbox"
+print(f"Loading Chatterbox Multilingual TTS from: {MODEL_DIR}")
+model = ChatterboxMultilingualTTS.from_local(MODEL_DIR, device=device)
 
 # Test text
 test_text = "Hello, this is a test of different parameter settings to match the reference voice."

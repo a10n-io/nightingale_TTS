@@ -7,7 +7,18 @@ import torch
 import torchaudio as ta
 from pathlib import Path
 from datetime import datetime
+import random
+import numpy as np
 from chatterbox.mtl_tts import ChatterboxMultilingualTTS, Conditionals
+
+# Set random seeds for reproducibility
+SEED = 42
+torch.manual_seed(SEED)
+torch.cuda.manual_seed_all(SEED)
+random.seed(SEED)
+np.random.seed(SEED)
+if torch.backends.mps.is_available():
+    torch.mps.manual_seed(SEED)
 
 # Automatically detect the best available device
 if torch.cuda.is_available():
@@ -18,13 +29,15 @@ else:
     device = "cpu"
 
 print(f"Using device: {device}")
+print(f"Random seed: {SEED}")
 
-# Load model
-print("Loading Chatterbox Multilingual TTS...")
-model = ChatterboxMultilingualTTS.from_pretrained(device=device)
+# Load model from local directory
+MODEL_DIR = "/Users/a10n/Projects/nightingale_TTS/models/chatterbox"
+print(f"Loading Chatterbox Multilingual TTS from: {MODEL_DIR}")
+model = ChatterboxMultilingualTTS.from_local(MODEL_DIR, device=device)
 
 # Load baked voice
-BAKED_VOICE = "/Users/a10n/Projects/nightingale_TTS/baked_voices/baked_voice.pt"
+BAKED_VOICE = "/Users/a10n/Projects/nightingale_TTS/baked_voices/samantha/baked_voice.pt"
 print(f"Loading baked voice from: {BAKED_VOICE}")
 model.conds = Conditionals.load(BAKED_VOICE, map_location=device)
 

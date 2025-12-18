@@ -104,6 +104,16 @@ venv/
 models/
 weights/
 
+# Generated audio files
+test_audio/
+verification_outputs/
+baked_voices/*/tuning/
+
+# Voice reference and baked files (large, user-specific)
+baked_voices/*/ref_audio.wav
+baked_voices/*/baked_voice.pt
+baked_voices/*/npy/
+
 # macOS
 .DS_Store
 .AppleDouble
