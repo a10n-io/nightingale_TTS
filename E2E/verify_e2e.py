@@ -356,6 +356,132 @@ def run_verification(test_case: TestCase, model, device: str, swift_only: bool =
     return results
 
 
+def print_comprehensive_summary(all_results: List[Tuple[TestCase, List[StageResult]]], run_swift: bool):
+    """Print a comprehensive summary of all test results."""
+    print()
+    print("=" * 80)
+    print("VERIFICATION SUMMARY")
+    print("=" * 80)
+    print()
+
+    # Collect stats by stage
+    stage_stats = {}  # stage_name -> {"passed": [], "failed": [], "diffs": []}
+
+    for tc, results in all_results:
+        for r in results:
+            if r.name not in stage_stats:
+                stage_stats[r.name] = {"passed": [], "failed": [], "diffs": []}
+
+            test_id = f"{tc.voice}/{tc.sentence_id}_{tc.language}"
+            if r.passed:
+                stage_stats[r.name]["passed"].append(test_id)
+            else:
+                stage_stats[r.name]["failed"].append(test_id)
+            if r.max_diff != float('inf'):
+                stage_stats[r.name]["diffs"].append(r.max_diff)
+
+    # Define all stages (including pending ones)
+    all_stages = [
+        ("1: Text Tokenization", "BPE tokenizer", True),
+        ("2: T3 Conditioning", "Speaker, emotion, perceiver & final cond", True),
+        ("3: T3 Token Generation", "Speech tokens from T3 transformer", True),
+        ("4: S3Gen Embedding", "Voice embedding", True),
+        ("5: S3Gen Encoder", "UpsampleConformer", False),
+        ("6: S3Gen ODE Solver", "Flow Matching", False),
+        ("7: Vocoder", "HiFTGenerator", False),
+        ("8: End-to-End Audio", "Full Audio Generation", False),
+    ]
+
+    # Print stage-by-stage summary
+    print("┌" + "─" * 78 + "┐")
+    print("│" + " STAGE-BY-STAGE VERIFICATION STATUS".center(78) + "│")
+    print("├" + "─" * 78 + "┤")
+
+    all_passed = True
+    for stage_name, description, implemented in all_stages:
+        if stage_name in stage_stats:
+            stats = stage_stats[stage_name]
+            passed_count = len(stats["passed"])
+            failed_count = len(stats["failed"])
+            total = passed_count + failed_count
+
+            if stats["diffs"]:
+                max_diff = max(stats["diffs"])
+                diff_str = f"{max_diff:.2e}"
+            else:
+                diff_str = "0.0"
+
+            if failed_count == 0:
+                status = "✅ VERIFIED"
+            else:
+                status = "❌ FAILED"
+                all_passed = False
+
+            # Format: Stage N: Name — STATUS (Diff: X) [N/N tests]
+            line = f"│ Stage {stage_name} — {status} (Diff: {diff_str})"
+            line = line.ljust(60) + f"[{passed_count}/{total} tests]".rjust(18) + "│"
+            print(line)
+            print(f"│   Notes: {description}".ljust(79) + "│")
+        elif implemented:
+            # Stage should exist but no results
+            print(f"│ Stage {stage_name} — ⚠️  NO DATA".ljust(79) + "│")
+            print(f"│   Notes: {description}".ljust(79) + "│")
+        else:
+            # Pending stage
+            print(f"│ Stage {stage_name} — ⏸️  PENDING".ljust(79) + "│")
+            print(f"│   Notes: {description} (Not yet implemented)".ljust(79) + "│")
+
+    print("└" + "─" * 78 + "┘")
+    print()
+
+    # Print test matrix
+    print("┌" + "─" * 78 + "┐")
+    print("│" + " TEST MATRIX (20 Test Cases)".center(78) + "│")
+    print("├" + "─" * 78 + "┤")
+
+    # Group by voice
+    voices = {}
+    for tc, results in all_results:
+        if tc.voice not in voices:
+            voices[tc.voice] = []
+        test_passed = all(r.passed for r in results)
+        voices[tc.voice].append((tc, test_passed, results))
+
+    for voice, tests in voices.items():
+        print(f"│ Voice: {voice}".ljust(79) + "│")
+        for tc, passed, results in tests:
+            status = "✅" if passed else "❌"
+            # Get max diff across all stages
+            diffs = [r.max_diff for r in results if r.max_diff != float('inf')]
+            max_diff = max(diffs) if diffs else 0.0
+            test_id = f"{tc.sentence_id}_{tc.language}"
+            text_preview = tc.text[:30] + "..." if len(tc.text) > 30 else tc.text
+            line = f"│   {status} {test_id.ljust(25)} \"{text_preview}\""
+            print(line[:79].ljust(79) + "│")
+        print("│".ljust(79) + "│")
+
+    print("└" + "─" * 78 + "┘")
+    print()
+
+    # Final verdict
+    total_tests = len(all_results)
+    passed_tests = sum(1 for _, results in all_results if all(r.passed for r in results))
+
+    print("=" * 80)
+    if all_passed:
+        print("✅ ALL TESTS PASSED")
+        print(f"   {passed_tests}/{total_tests} test cases verified successfully")
+        if run_swift:
+            print("   Python/PyTorch ↔ Swift/MLX parity confirmed for implemented stages")
+        else:
+            print("   Python reference generation complete")
+    else:
+        print("❌ SOME TESTS FAILED")
+        print(f"   {passed_tests}/{total_tests} test cases passed")
+    print("=" * 80)
+    print()
+
+
 def main():
     parser = argparse.ArgumentParser(description="E2E Verification for Python vs Swift")
     parser.add_argument("--voice", "-v", default=None, help="Filter to specific voice")
@@ -392,7 +518,9 @@ def main():
     print(f"Running {len(test_cases)} test cases...")
     print()
 
+    all_results = []  # List of (TestCase, List[StageResult])
     all_passed = True
+
     for i, tc in enumerate(test_cases, 1):
         print("-" * 80)
         print(f"[{i}/{len(test_cases)}] Voice: {tc.voice} | Sentence: {tc.sentence_id} | Lang: {tc.language}")
@@ -401,6 +529,7 @@ def main():
 
         try:
             results = run_verification(tc, model, args.device, args.swift_only, run_swift)
+            all_results.append((tc, results))
 
             for r in results:
                 print(f"  {format_result(r)}")
@@ -420,15 +549,8 @@ def main():
             print("=" * 80)
             sys.exit(1)
 
-    print("=" * 80)
-    print("VERIFICATION SUMMARY")
-    print("=" * 80)
-    if all_passed:
-        print("✅ ALL TESTS PASSED")
-    else:
-        print("❌ SOME TESTS FAILED")
-    print(f"Total test cases: {len(test_cases)}")
-    print()
+    # Print comprehensive summary
+    print_comprehensive_summary(all_results, run_swift)
 
 
 if __name__ == "__main__":
