@@ -381,15 +381,16 @@ def print_comprehensive_summary(all_results: List[Tuple[TestCase, List[StageResu
                 stage_stats[r.name]["diffs"].append(r.max_diff)
 
     # Define all stages (including pending ones)
+    # Format: (stage_name, description, swift_implemented, python_reference_available)
     all_stages = [
-        ("1: Text Tokenization", "BPE tokenizer", True),
-        ("2: T3 Conditioning", "Speaker, emotion, perceiver & final cond", True),
-        ("3: T3 Token Generation", "Speech tokens from T3 transformer", True),
-        ("4: S3Gen Embedding", "Voice embedding", True),
-        ("5: S3Gen Encoder", "UpsampleConformer", False),
-        ("6: S3Gen ODE Solver", "Flow Matching", False),
-        ("7: Vocoder", "HiFTGenerator", False),
-        ("8: End-to-End Audio", "Full Audio Generation", False),
+        ("1: Text Tokenization", "BPE tokenizer", True, True),
+        ("2: T3 Conditioning", "Speaker, emotion, perceiver & final cond", True, True),
+        ("3: T3 Token Generation", "Speech tokens from T3 transformer", True, True),
+        ("4: S3Gen Embedding", "Voice embedding", True, True),
+        ("5: S3Gen Input Prep", "Token concat, mask, embedding, spk projection", False, True),
+        ("6: S3Gen Encoder", "UpsampleConformer encoder", False, True),
+        ("7: ODE Solver", "Flow Matching / CFM decoder", False, True),
+        ("8: Vocoder", "HiFTGenerator mel-to-audio", False, True),
     ]
 
     # Print stage-by-stage summary
@@ -398,7 +399,7 @@ def print_comprehensive_summary(all_results: List[Tuple[TestCase, List[StageResu
     print("├" + "─" * 78 + "┤")
 
     all_passed = True
-    for stage_name, description, implemented in all_stages:
+    for stage_name, description, swift_implemented, python_available in all_stages:
         if stage_name in stage_stats:
             stats = stage_stats[stage_name]
             passed_count = len(stats["passed"])
@@ -422,14 +423,18 @@ def print_comprehensive_summary(all_results: List[Tuple[TestCase, List[StageResu
             line = line.ljust(60) + f"[{passed_count}/{total} tests]".rjust(18) + "│"
             print(line)
             print(f"│   Notes: {description}".ljust(79) + "│")
-        elif implemented:
+        elif swift_implemented:
             # Stage should exist but no results
             print(f"│ Stage {stage_name} — ⚠️  NO DATA".ljust(79) + "│")
             print(f"│   Notes: {description}".ljust(79) + "│")
+        elif python_available:
+            # Python reference available but Swift verification pending
+            print(f"│ Stage {stage_name} — ⏸️  SWIFT PENDING".ljust(79) + "│")
+            print(f"│   Notes: {description} (Python reference ✓)".ljust(79) + "│")
         else:
-            # Pending stage
-            print(f"│ Stage {stage_name} — ⏸️  PENDING".ljust(79) + "│")
-            print(f"│   Notes: {description} (Not yet implemented)".ljust(79) + "│")
+            # Fully pending stage
+            print(f"│ Stage {stage_name} — ⏸️  NOT IMPLEMENTED".ljust(79) + "│")
+            print(f"│   Notes: {description}".ljust(79) + "│")
 
     print("└" + "─" * 78 + "┘")
     print()

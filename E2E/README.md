@@ -6,12 +6,24 @@ This directory contains the end-to-end verification framework for comparing Pyth
 
 The verification compares intermediate outputs at each stage of the TTS pipeline:
 
-| Stage | Description | Comparison |
-|-------|-------------|------------|
-| 1 | Text Tokenization | BPE tokens must match exactly |
-| 2 | T3 Conditioning | Speaker/emotion embeddings (diff < 0.001) |
-| 3 | T3 Token Generation | Speech tokens (Python reference) |
-| 4 | S3Gen Embedding | Voice embedding (Python reference) |
+| Stage | Description | Swift Status | Tolerance |
+|-------|-------------|--------------|-----------|
+| 1 | Text Tokenization | ✅ Verified | Exact match |
+| 2 | T3 Conditioning | ✅ Verified | diff < 0.001 |
+| 3 | T3 Token Generation | ✅ Reference | Python reference |
+| 4 | S3Gen Embedding | ✅ Reference | Python reference |
+| 5 | S3Gen Input Prep | ⏸️ Framework ready | diff < 0.01 |
+| 6 | S3Gen Encoder | ⚠️ Known issue | See notes |
+| 7 | ODE Solver | ⏸️ Framework ready | diff < 2.0 |
+| 8 | Vocoder | ⏸️ Framework ready | diff < 0.1 |
+
+### Known Issues
+
+**Swift UpsampleEncoder Attention Bug**: The Swift encoder has a shape mismatch in the upEncoder attention layers:
+```
+Shapes (1,80,64) and (1,564,80) cannot be broadcast
+```
+This affects full numerical verification for stages 5-8. The framework is complete but S3Gen model loading is currently skipped.
 
 ## Quick Start
 
@@ -30,6 +42,9 @@ python/venv/bin/python E2E/verify_e2e.py
 
 # Filter to specific test case
 ./E2E/verify_e2e.py --voice samantha --sentence basic_greeting --lang en
+
+# Skip Python generation entirely
+./E2E/verify_e2e.py --no-swift
 ```
 
 **Do NOT use system python3** - it won't have the chatterbox package installed.
@@ -84,7 +99,7 @@ Total test cases: 20
 
 ### run_python_e2e.py
 
-Standalone Python reference generator. Useful for regenerating all references without Swift comparison.
+Standalone Python reference generator. Generates reference outputs for all 8 stages.
 
 ```bash
 # Run directly (uses venv shebang)
@@ -133,11 +148,53 @@ E2E/
     │   │   ├── step2_final_cond.npy
     │   │   ├── step2_emotion_value.npy
     │   │   ├── step3_speech_tokens.npy
-    │   │   └── step4_embedding.npy
+    │   │   ├── step4_embedding.npy
+    │   │   ├── step4_prompt_token.npy
+    │   │   ├── step4_prompt_feat.npy
+    │   │   ├── step5_full_tokens.npy
+    │   │   ├── step5_token_emb.npy
+    │   │   ├── step5_spk_emb.npy
+    │   │   ├── step6_encoder_out.npy
+    │   │   ├── step6_mu.npy
+    │   │   ├── step6_x_cond.npy
+    │   │   ├── step7_mel.npy
+    │   │   ├── step7_initial_noise.npy
+    │   │   ├── step7_mel_trimmed.npy
+    │   │   └── step8_audio.npy
     │   └── ...
     └── sujano/
         └── ...
 ```
+
+## Swift Verification Tool
+
+The Swift verification tool is located at `swift/test_scripts/VerifyLive/`.
+
+### Building
+
+```bash
+cd swift/test_scripts/VerifyLive
+swift build
+```
+
+### Running
+
+```bash
+# Basic usage
+.build/debug/VerifyLive --voice samantha --ref-dir /path/to/reference_outputs/samantha/basic_greeting_en
+
+# Help
+.build/debug/VerifyLive --help
+```
+
+### Current Status
+
+| Stage | Swift Implementation | Notes |
+|-------|---------------------|-------|
+| 1-2 | Full numerical verification | Matches Python exactly |
+| 5-8 | Framework complete | S3Gen skipped due to encoder bug |
+
+The verification framework for stages 5-8 is complete but currently runs in "reference validation" mode (checks files exist) until the encoder bug is fixed.
 
 ## Determinism Settings
 
@@ -146,6 +203,8 @@ For reproducible results:
 - **Temperature**: 0.001 (near-deterministic, 0.0 causes NaN)
 - **CFG Weight**: 0.5
 - **Repetition Penalty**: 2.0
+- **n_timesteps**: 10 (ODE solver steps)
+- **cfg_rate**: 0.7 (classifier-free guidance rate)
 
 ## Prerequisites
 
@@ -297,6 +356,13 @@ Ensure the tokenizer vocab and merges files match between Python and Swift.
 Make the script executable:
 ```bash
 chmod +x E2E/verify_e2e.py E2E/run_python_e2e.py
+```
+
+### Swift encoder shape mismatch
+The Swift UpsampleEncoder has a known bug in attention layers. The verification framework skips S3Gen model loading until this is fixed. To enable (for debugging):
+```swift
+// In VerifyLive/main.swift
+let skipS3Gen = false  // Change from true to false
 ```
 
 ## Adding New Test Cases

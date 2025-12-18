@@ -191,8 +191,140 @@ def run_test_case(model, test_case: TestCase, device: str) -> dict:
     outputs["step4_prompt_feat"] = prompt_feat.detach().cpu().numpy()
     outputs["step4_embedding"] = embedding.detach().cpu().numpy()
 
-    # Step 5: S3Gen Encoder
-    # This requires more internal access - save what we can
+    # =========================================================================
+    # Step 5: S3Gen Input Preparation
+    # =========================================================================
+    # Ensure speech_tokens is 2D [1, N]
+    if speech_tokens.dim() == 1:
+        speech_tokens = speech_tokens.unsqueeze(0)
+
+    # Concatenate prompt_token + speech_tokens
+    prompt_token_len = torch.LongTensor([prompt_token.size(1)]).to(device)
+    speech_token_len = torch.LongTensor([speech_tokens.size(1)]).to(device)
+
+    full_tokens = torch.cat([prompt_token, speech_tokens], dim=1)
+    full_token_len = prompt_token_len + speech_token_len
+
+    outputs["step5_full_tokens"] = full_tokens.detach().cpu().numpy().astype(np.int32)
+    outputs["step5_prompt_token_len"] = prompt_token_len.detach().cpu().numpy().astype(np.int32)
+    outputs["step5_speech_token_len"] = speech_token_len.detach().cpu().numpy().astype(np.int32)
+
+    # Create mask for input tokens
+    from chatterbox.models.s3gen.utils.mask import make_pad_mask
+    mask = (~make_pad_mask(full_token_len)).unsqueeze(-1).to(embedding)
+    outputs["step5_mask"] = mask.detach().cpu().numpy()
+
+    # Apply input embedding
+    s3gen_flow = model.s3gen.flow
+    vocab_size = s3gen_flow.vocab_size
+    full_tokens_clamped = torch.clamp(full_tokens, min=0, max=vocab_size-1)
+    token_emb = s3gen_flow.input_embedding(full_tokens_clamped.long()) * mask
+    outputs["step5_token_emb"] = token_emb.detach().cpu().numpy()
+
+    # Speaker embedding: normalize and project
+    embedding_norm = F.normalize(embedding, dim=1)
+    spk_emb = s3gen_flow.spk_embed_affine_layer(embedding_norm)
+    outputs["step5_spk_emb"] = spk_emb.detach().cpu().numpy()
+
+    # =========================================================================
+    # Step 6: S3Gen Encoder (UpsampleConformer)
+    # =========================================================================
+    encoder_out, encoder_masks = s3gen_flow.encoder(token_emb, full_token_len)
+    outputs["step6_encoder_out"] = encoder_out.detach().cpu().numpy()
+
+    # Encoder projection to output size (512 -> 80)
+    mu = s3gen_flow.encoder_proj(encoder_out)
+    outputs["step6_mu"] = mu.detach().cpu().numpy()
+
+    # Prepare conditioning (prompt_feat padded to match encoder output length)
+    mel_len1 = prompt_feat.shape[1]
+    mel_len2 = encoder_out.shape[1] - prompt_feat.shape[1]
+    x_cond = torch.zeros([1, mel_len1 + mel_len2, 80], device=device).to(mu.dtype)
+    x_cond[:, :mel_len1] = prompt_feat
+    outputs["step6_x_cond"] = x_cond.detach().cpu().numpy()
+
+    # =========================================================================
+    # Step 7: ODE Solver (Flow Matching / CFM)
+    # =========================================================================
+    # Generate deterministic initial noise
+    set_deterministic_seeds(SEED)
+    initial_noise = torch.randn(1, 80, encoder_out.shape[1], device=device, dtype=mu.dtype)
+    outputs["step7_initial_noise"] = initial_noise.detach().cpu().numpy()
+
+    # Transpose for decoder: [B, T, C] -> [B, C, T]
+    mu_t = mu.transpose(1, 2).contiguous()
+    x_cond_t = x_cond.transpose(1, 2).contiguous()
+
+    # Prepare mask for decoder
+    h_lengths = encoder_masks.sum(dim=-1).squeeze(dim=-1)
+    decoder_mask = (~make_pad_mask(h_lengths)).unsqueeze(1).to(mu)
+
+    # Run ODE solver (n_timesteps=10, CFG)
+    n_timesteps = 10
+    cfg_rate = 0.7
+
+    # Cosine time scheduling
+    t_span = []
+    for i in range(n_timesteps + 1):
+        linear_t = i / n_timesteps
+        cosine_t = 1.0 - np.cos(linear_t * 0.5 * np.pi)
+        t_span.append(cosine_t)
+
+    xt = initial_noise.clone()
+
+    for step_idx in range(n_timesteps):
+        t = torch.tensor([t_span[step_idx]], device=device, dtype=mu.dtype)
+        dt = t_span[step_idx + 1] - t_span[step_idx]
+
+        # Prepare CFG batch: [Cond, Uncond]
+        x_in = torch.cat([xt, xt], dim=0)
+        mu_in = torch.cat([mu_t, torch.zeros_like(mu_t)], dim=0)
+        spk_in = torch.cat([spk_emb, torch.zeros_like(spk_emb)], dim=0)
+        cond_in = torch.cat([x_cond_t, torch.zeros_like(x_cond_t)], dim=0)
+        t_in = torch.cat([t, t], dim=0)
+        mask_in = torch.cat([decoder_mask, decoder_mask], dim=0)
+
+        # Forward pass through decoder
+        v_batch = s3gen_flow.decoder.estimator(
+            x_in, mask_in, mu_in, t_in, spk_in, cond_in
+        )
+
+        # Split and apply CFG
+        v_cond = v_batch[0:1]
+        v_uncond = v_batch[1:2]
+        v = (1.0 + cfg_rate) * v_cond - cfg_rate * v_uncond
+
+        # Euler step
+        xt = xt + v * dt
+
+    # xt is [B, C, T] format - save both formats
+    mel_bct = xt  # [B, C, T] for vocoder
+    mel_btc = xt.transpose(1, 2).contiguous()  # [B, T, C] for saving
+    outputs["step7_mel"] = mel_btc.detach().cpu().numpy()
+
+    # Trim prompt portion from mel - work in [B, C, T] format
+    # mel_len1 and mel_len2 are in the time dimension
+    mel_trimmed = mel_bct[:, :, mel_len1:]  # [B, C, T-mel_len1]
+    outputs["step7_mel_trimmed"] = mel_trimmed.transpose(1, 2).detach().cpu().numpy()
+
+    # =========================================================================
+    # Step 8: Vocoder (HiFTGenerator)
+    # =========================================================================
+    # Run vocoder on trimmed mel spectrogram - vocoder expects [B, C, T]
+    # mel_trimmed is already [B, C, T] format
+    cache_source = torch.zeros(1, 1, 0, device=device, dtype=mel_trimmed.dtype)
+    audio, source = model.s3gen.mel2wav.inference(
+        speech_feat=mel_trimmed,
+        cache_source=cache_source
+    )
+
+    # Apply fade-in to reduce artifacts (same as S3Token2Wav)
+    # Clone to avoid in-place modification of inference tensor
+    audio = audio.clone()
+    trim_fade = model.s3gen.trim_fade.to(audio.device)
+    audio[:, :len(trim_fade)] *= trim_fade
+
+    outputs["step8_audio"] = audio.detach().cpu().numpy()
 
     # Save metadata
     outputs["metadata"] = {
@@ -203,6 +335,9 @@ def run_test_case(model, test_case: TestCase, device: str) -> dict:
         "seed": SEED,
         "temperature": TEMPERATURE,
         "device": device,
+        "sample_rate": 24000,  # S3GEN_SR
+        "n_cfm_timesteps": n_timesteps,
+        "cfg_rate": cfg_rate,
     }
 
     return outputs
@@ -217,8 +352,14 @@ def save_outputs(outputs: dict, test_case: TestCase):
         if key == "metadata":
             with open(case_dir / "metadata.json", "w") as f:
                 json.dump(value, f, indent=2)
-        else:
+        elif isinstance(value, np.ndarray):
             np.save(case_dir / f"{key}.npy", value)
+        elif isinstance(value, (int, float)):
+            # Save scalar values in metadata
+            pass  # Already handled in metadata
+        else:
+            # Skip non-array values
+            pass
 
     return case_dir
 
@@ -231,6 +372,15 @@ def verify_outputs(outputs: dict) -> bool:
     if outputs["step2_final_cond"].shape[1] != 34:  # 1 + 32 + 1
         return False
     if outputs["step3_speech_tokens"].shape[0] == 0:
+        return False
+    # Check steps 5-8 outputs exist
+    if "step5_full_tokens" not in outputs:
+        return False
+    if "step6_encoder_out" not in outputs:
+        return False
+    if "step7_mel" not in outputs:
+        return False
+    if "step8_audio" not in outputs:
         return False
     return True
 

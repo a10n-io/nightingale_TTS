@@ -5,5 +5,8 @@
   "language": "nl",
   "seed": 42,
   "temperature": 0.001,
-  "device": "mps"
+  "device": "cpu",
+  "sample_rate": 24000,
+  "n_cfm_timesteps": 10,
+  "cfg_rate": 0.7
 }
