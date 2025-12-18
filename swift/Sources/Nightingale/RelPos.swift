@@ -72,19 +72,52 @@ public class EspnetRelPositionalEncoding: Module {
         self.pe = peFull.expandedDimensions(axis: 0)
     }
     
+    public static var posEncDebug: Bool = false
+
     public func callAsFunction(_ x: MLXArray) -> (MLXArray, MLXArray) {
         // x: [B, T, D]
         let size = x.shape[1]
+
+        if Self.posEncDebug {
+            print("EspnetRelPos DEBUG: x.shape = \(x.shape), dModel=\(dModel)"); fflush(stdout)
+        }
+
         extendPe(size: size)
-        
+
+        if Self.posEncDebug {
+            print("EspnetRelPos DEBUG: after extendPe, pe.shape = \(pe.shape)"); fflush(stdout)
+            print("EspnetRelPos DEBUG: about to compute xScaled = x * xscale (xscale=\(xscale))"); fflush(stdout)
+        }
+
         let xScaled = x * xscale
+
+        if Self.posEncDebug {
+            print("EspnetRelPos DEBUG: xScaled computed, shape = \(xScaled.shape)"); fflush(stdout)
+        }
+
         // pos_emb: [1, 2*T-1, D] center crop
         let center = pe.shape[1] / 2
         let start = center - size + 1
         let end = center + size
+
+        if Self.posEncDebug {
+            print("EspnetRelPos DEBUG: center=\(center), start=\(start), end=\(end)"); fflush(stdout)
+            print("EspnetRelPos DEBUG: about to slice pe[\(0)..<\(pe.shape[0]), \(start)..<\(end), \(0)..<\(pe.shape[2])]"); fflush(stdout)
+        }
+
         // Use Range for slicing
         let posEmb = pe[0..., start..<end, 0...]
-        
+
+        if Self.posEncDebug {
+            print("EspnetRelPos DEBUG: posEmb computed, shape = \(posEmb.shape)"); fflush(stdout)
+            print("EspnetRelPos DEBUG: forcing eval of xScaled..."); fflush(stdout)
+            eval(xScaled)
+            print("EspnetRelPos DEBUG: xScaled eval done"); fflush(stdout)
+            print("EspnetRelPos DEBUG: forcing eval of posEmb..."); fflush(stdout)
+            eval(posEmb)
+            print("EspnetRelPos DEBUG: posEmb eval done"); fflush(stdout)
+        }
+
         return (xScaled, posEmb)
     }
 }
@@ -147,21 +180,60 @@ public class RelPositionMultiHeadAttention: Module {
         return xFinalFull[0..., 0..., 0..., 0..<T]
     }
     
+    public static var debugEnabled: Bool = false
+
     public func callAsFunction(_ x: MLXArray, mask: MLXArray? = nil, posEmb: MLXArray) -> MLXArray {
         let B = x.shape[0]
         let T = x.shape[1]
+        let D = x.shape[2]
+
+        if Self.debugEnabled {
+            print("ATTENTION DEBUG:")
+            print("  Input x: \(x.shape) (expected [B, T, 512])")
+            print("  posEmb: \(posEmb.shape) (expected [1, 2*T-1, 512])")
+            print("  numHeads=\(numHeads), dHead=\(dHead), dModel=\(dModel)")
+            print("  queryProj.weight: \(queryProj.weight.shape)")
+            print("  linearPos.weight: \(linearPos.weight.shape)")
+            print("  posBiasU: \(posBiasU.shape)")
+
+            // Check dimensions
+            if D != dModel {
+                print("  ❌ WARNING: x dimension \(D) != dModel \(dModel)!")
+            }
+            if posEmb.shape[2] != dModel {
+                print("  ❌ WARNING: posEmb dimension \(posEmb.shape[2]) != dModel \(dModel)!")
+            }
+        }
 
         let q = queryProj(x).reshaped([B, T, numHeads, dHead]).transposed(0, 2, 1, 3) // [B, H, T, D_h]
         let k = keyProj(x).reshaped([B, T, numHeads, dHead]).transposed(0, 2, 1, 3)
         let v = valueProj(x).reshaped([B, T, numHeads, dHead]).transposed(0, 2, 1, 3)
 
+        if Self.debugEnabled {
+            print("  After Q/K/V projection: q=\(q.shape), k=\(k.shape), v=\(v.shape)")
+        }
+
         // Pos embeddings
         let nBatchPos = posEmb.shape[0]
-        let p = linearPos(posEmb).reshaped([nBatchPos, -1, numHeads, dHead]).transposed(0, 2, 1, 3)
+        let posEmbProj = linearPos(posEmb)
+        if Self.debugEnabled {
+            print("  After linearPos: \(posEmbProj.shape)")
+        }
+        let p = posEmbProj.reshaped([nBatchPos, -1, numHeads, dHead]).transposed(0, 2, 1, 3)
+        if Self.debugEnabled {
+            print("  After reshape/transpose p: \(p.shape)")
+        }
 
         // Add biases
-        let qWithBiasU = q + posBiasU.reshaped([1, numHeads, 1, dHead])
-        let qWithBiasV = q + posBiasV.reshaped([1, numHeads, 1, dHead])
+        let biasUReshaped = posBiasU.reshaped([1, numHeads, 1, dHead])
+        let biasVReshaped = posBiasV.reshaped([1, numHeads, 1, dHead])
+        if Self.debugEnabled {
+            print("  biasU reshaped: \(biasUReshaped.shape)")
+            print("  biasV reshaped: \(biasVReshaped.shape)")
+            print("  About to add q + biasU: q=\(q.shape), biasU=\(biasUReshaped.shape)")
+        }
+        let qWithBiasU = q + biasUReshaped
+        let qWithBiasV = q + biasVReshaped
 
         // Attention Scores
         let matrixAC = matmul(qWithBiasU, k.transposed(0, 1, 3, 2)) // [B, H, T, T]
