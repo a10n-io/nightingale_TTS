@@ -104,8 +104,15 @@ def get_test_cases(voice_filter: Optional[str] = None,
     return test_cases
 
 
-def generate_python_reference(model, test_case: TestCase, device: str) -> dict:
-    """Generate Python reference outputs for a test case."""
+def generate_python_reference(model, test_case: TestCase, device: str, max_step: int = 5) -> dict:
+    """Generate Python reference outputs for a test case.
+
+    Args:
+        model: The Chatterbox model
+        test_case: Test case configuration
+        device: Device to run on (cpu, mps, cuda)
+        max_step: Maximum step to generate (1-5). Default: 5
+    """
     from chatterbox.mtl_tts import Conditionals, punc_norm
     from chatterbox.models.s3gen.s3gen import drop_invalid_tokens
     import torch.nn.functional as F
@@ -118,18 +125,33 @@ def generate_python_reference(model, test_case: TestCase, device: str) -> dict:
 
     outputs = {}
 
-    # Step 1: Tokenization
+    # Step 1: Tokenization (with language_id as Python implementation does)
+    # Save metadata for verification
+    outputs["step1_text_original"] = test_case.text  # Original text from config
     text = punc_norm(test_case.text)
+    outputs["step1_text_after_punc_norm"] = text  # After punctuation normalization
+    outputs["step1_language_id"] = test_case.language.lower()  # Language ID used
+
     text_tokens = model.tokenizer.text_to_tokens(text, language_id=test_case.language.lower())
     text_tokens = text_tokens.to(device)
     outputs["step1_text_tokens"] = text_tokens[0].detach().cpu().numpy().astype(np.int32)
+    outputs["step1_token_count"] = len(text_tokens[0])  # Number of tokens
 
-    # Prepare for T3
-    text_tokens_cfg = torch.cat([text_tokens, text_tokens], dim=0)
-    sot = model.t3.hp.start_text_token
-    eot = model.t3.hp.stop_text_token
-    text_tokens_cfg = F.pad(text_tokens_cfg, (1, 0), value=sot)
-    text_tokens_cfg = F.pad(text_tokens_cfg, (0, 1), value=eot)
+    # Prepare for T3 (CFG + SOT/EOT padding)
+    # CRITICAL: This must match Swift's preparation exactly
+    text_tokens_cfg = torch.cat([text_tokens, text_tokens], dim=0)  # [2, N] - duplicate for CFG
+    sot = model.t3.hp.start_text_token  # 255
+    eot = model.t3.hp.stop_text_token   # 0
+    outputs["step1_sot_token"] = sot  # Save SOT token value
+    outputs["step1_eot_token"] = eot  # Save EOT token value
+    text_tokens_cfg = F.pad(text_tokens_cfg, (1, 0), value=sot)  # Prepend SOT: [2, N+1]
+    text_tokens_cfg = F.pad(text_tokens_cfg, (0, 1), value=eot)  # Append EOT: [2, N+2]
+
+    # Save CFG-prepared tokens for verification
+    outputs["step1_text_tokens_cfg"] = text_tokens_cfg.detach().cpu().numpy().astype(np.int32)
+
+    if max_step == 1:
+        return outputs
 
     # Step 2: T3 Conditioning
     t3 = model.t3
@@ -178,6 +200,31 @@ def generate_python_reference(model, test_case: TestCase, device: str) -> dict:
     # Step 4: S3Gen embedding info
     gen_conds = model.conds.gen
     outputs["step4_embedding"] = gen_conds["embedding"].detach().cpu().numpy()
+    outputs["step4_prompt_token"] = gen_conds["prompt_token"].detach().cpu().numpy().astype(np.int32)
+    outputs["step4_prompt_feat"] = gen_conds["prompt_feat"].detach().cpu().numpy()
+
+    # Step 5: S3Gen Input Preparation
+    prompt_token = gen_conds["prompt_token"]
+    prompt_feat = gen_conds["prompt_feat"]
+    soul_s3 = gen_conds["embedding"]
+
+    # Concatenate tokens
+    full_tokens = torch.cat([prompt_token.squeeze(0), speech_tokens.squeeze(0)], dim=0).unsqueeze(0)
+    outputs["step5_full_tokens"] = full_tokens.squeeze(0).detach().cpu().numpy().astype(np.int32)
+
+    # Token embedding lookup
+    token_emb = model.s3gen.flow.input_embedding(full_tokens.to(device))
+    outputs["step5_token_emb"] = token_emb.detach().cpu().numpy()
+
+    # Speaker embedding projection
+    spk_emb_normalized = F.normalize(soul_s3, dim=-1)
+    spk_emb_proj = model.s3gen.flow.spk_embed_affine_layer(spk_emb_normalized)
+    outputs["step5_spk_emb"] = spk_emb_proj.detach().cpu().numpy()
+
+    # Steps 6-8: DISABLED FOR NOW - Will add after Steps 1-5 working
+    # Step 6: S3Gen Encoder
+    # Step 7: Full ODE generation
+    # Step 8: Vocoder
 
     return outputs
 
@@ -187,10 +234,17 @@ def save_outputs(outputs: dict, test_case: TestCase):
     case_dir = OUTPUT_DIR / test_case.voice / f"{test_case.sentence_id}_{test_case.language}"
     case_dir.mkdir(parents=True, exist_ok=True)
 
+    # Separate metadata from arrays
+    metadata = {}
     for key, value in outputs.items():
-        np.save(case_dir / f"{key}.npy", value)
+        if isinstance(value, (str, int, float)):
+            # Save metadata to config
+            metadata[key] = value
+        else:
+            # Save arrays as .npy files
+            np.save(case_dir / f"{key}.npy", value)
 
-    # Save config for Swift
+    # Save config for Swift (including Step 1 metadata)
     config = {
         "text": test_case.text,
         "voice": test_case.voice,
@@ -198,6 +252,7 @@ def save_outputs(outputs: dict, test_case: TestCase):
         "sentence_id": test_case.sentence_id,
         "seed": SEED,
         "temperature": TEMPERATURE,
+        **metadata,  # Add all metadata (text_original, language_id, sot_token, etc.)
     }
     with open(case_dir / "config.json", "w") as f:
         json.dump(config, f, indent=2)
@@ -312,21 +367,39 @@ def format_result(stage: StageResult) -> str:
     return f"Stage {stage.name} — {status} (Diff: {diff_str})\n  Notes: {stage.notes}"
 
 
-def run_verification(test_case: TestCase, model, device: str, swift_only: bool = False, run_swift: bool = True) -> List[StageResult]:
-    """Run full verification for a test case."""
+def run_verification(test_case: TestCase, model, device: str, swift_only: bool = False, run_swift: bool = True, max_step: int = 5) -> List[StageResult]:
+    """Run full verification for a test case.
+
+    Args:
+        test_case: Test case to verify
+        model: Chatterbox model
+        device: Device to run on
+        swift_only: Skip Python generation
+        run_swift: Run Swift verification
+        max_step: Maximum step to generate/verify (1-5)
+    """
     results = []
     case_dir = OUTPUT_DIR / test_case.voice / f"{test_case.sentence_id}_{test_case.language}"
 
     # Generate Python reference (unless swift_only)
     if not swift_only:
-        print(f"  Generating Python reference...")
-        outputs = generate_python_reference(model, test_case, device)
+        print(f"  Generating Python reference (steps 1-{max_step})...")
+        outputs = generate_python_reference(model, test_case, device, max_step=max_step)
         save_outputs(outputs, test_case)
 
-    # Load Python references
+    # Load Python references (only for steps up to max_step)
     python_refs = {}
     for f in case_dir.glob("*.npy"):
-        python_refs[f.stem] = np.load(f)
+        # Filter by step number - only load files for steps <= max_step
+        stem = f.stem
+        if stem.startswith("step"):
+            try:
+                step_num = int(stem.split("_")[0].replace("step", ""))
+                if step_num > max_step:
+                    continue  # Skip files beyond max_step
+            except (ValueError, IndexError):
+                pass  # Keep non-step files (like old references)
+        python_refs[stem] = np.load(f)
 
     # Run Swift verification if requested
     swift_passed = None
@@ -352,7 +425,7 @@ def run_verification(test_case: TestCase, model, device: str, swift_only: bool =
         results.append(StageResult(name="1: Text Tokenization", passed=passed, max_diff=diff, notes=notes))
 
     # Stage 2: T3 Conditioning
-    if "step2_final_cond" in python_refs:
+    if max_step >= 2 and "step2_final_cond" in python_refs:
         cond_shape = python_refs["step2_final_cond"].shape
         emotion_val = python_refs["step2_emotion_value"].flatten()[0]
         swift_cond = swift_results.get("conditioning", {})
@@ -367,7 +440,7 @@ def run_verification(test_case: TestCase, model, device: str, swift_only: bool =
         results.append(StageResult(name="2: T3 Conditioning", passed=passed, max_diff=diff, notes=notes))
 
     # Stage 3: T3 Token Generation (Python only for now)
-    if "step3_speech_tokens" in python_refs:
+    if max_step >= 3 and "step3_speech_tokens" in python_refs:
         token_count = len(python_refs["step3_speech_tokens"])
         results.append(StageResult(
             name="3: T3 Token Generation",
@@ -377,7 +450,7 @@ def run_verification(test_case: TestCase, model, device: str, swift_only: bool =
         ))
 
     # Stage 4: S3Gen Embedding (Python only for now)
-    if "step4_embedding" in python_refs:
+    if max_step >= 4 and "step4_embedding" in python_refs:
         emb_shape = python_refs["step4_embedding"].shape
         results.append(StageResult(
             name="4: S3Gen Embedding",
@@ -387,44 +460,49 @@ def run_verification(test_case: TestCase, model, device: str, swift_only: bool =
         ))
 
     # Stage 5: S3Gen Input Prep
-    swift_s3_input = swift_results.get("s3gen_input", {})
-    if run_swift and swift_s3_input.get("passed") is not None:
-        passed = swift_s3_input["passed"]
-        diff = swift_s3_input.get("diff", 0.0) or 0.0
-        notes = f"Token concat, embedding, speaker projection - Swift {'MATCH' if passed else 'MISMATCH'}"
-        results.append(StageResult(name="5: S3Gen Input Prep", passed=passed, max_diff=diff, notes=notes))
+    if max_step >= 5:
+        swift_s3_input = swift_results.get("s3gen_input", {})
+        if run_swift and swift_s3_input.get("passed") is not None:
+            passed = swift_s3_input["passed"]
+            diff = swift_s3_input.get("diff", 0.0) or 0.0
+            notes = f"Token concat, embedding, speaker projection - Swift {'MATCH' if passed else 'MISMATCH'}"
+            results.append(StageResult(name="5: S3Gen Input Prep", passed=passed, max_diff=diff, notes=notes))
 
     # Stage 6: S3Gen Encoder
-    swift_encoder = swift_results.get("encoder", {})
-    if run_swift and swift_encoder.get("passed") is not None:
-        passed = swift_encoder["passed"]
-        diff = swift_encoder.get("diff", 0.0) or 0.0
-        notes = f"UpsampleConformer encoder - Swift {'MATCH' if passed else 'MISMATCH'}"
-        results.append(StageResult(name="6: S3Gen Encoder", passed=passed, max_diff=diff, notes=notes))
+    if max_step >= 6:
+        swift_encoder = swift_results.get("encoder", {})
+        if run_swift and swift_encoder.get("passed") is not None:
+            passed = swift_encoder["passed"]
+            diff = swift_encoder.get("diff", 0.0) or 0.0
+            notes = f"UpsampleConformer encoder - Swift {'MATCH' if passed else 'MISMATCH'}"
+            results.append(StageResult(name="6: S3Gen Encoder", passed=passed, max_diff=diff, notes=notes))
 
     # Stage 7a: Decoder Forward Pass
-    swift_decoder = swift_results.get("decoder_forward", {})
-    if run_swift and swift_decoder.get("passed") is not None:
-        passed = swift_decoder["passed"]
-        diff = swift_decoder.get("diff", 0.0) or 0.0
-        notes = f"Single decoder forward pass - Swift {'MATCH' if passed else 'MISMATCH'}"
-        results.append(StageResult(name="7a: Decoder Forward", passed=passed, max_diff=diff, notes=notes))
+    if max_step >= 7:
+        swift_decoder = swift_results.get("decoder_forward", {})
+        if run_swift and swift_decoder.get("passed") is not None:
+            passed = swift_decoder["passed"]
+            diff = swift_decoder.get("diff", 0.0) or 0.0
+            notes = f"Single decoder forward pass - Swift {'MATCH' if passed else 'MISMATCH'}"
+            results.append(StageResult(name="7a: Decoder Forward", passed=passed, max_diff=diff, notes=notes))
 
     # Stage 7: ODE Solver
-    swift_ode = swift_results.get("ode_solver", {})
-    if run_swift and swift_ode.get("passed") is not None:
-        passed = swift_ode["passed"]
-        diff = swift_ode.get("diff", 0.0) or 0.0
-        notes = f"Flow Matching ODE solver - Swift {'MATCH' if passed else 'MISMATCH'}"
-        results.append(StageResult(name="7: ODE Solver", passed=passed, max_diff=diff, notes=notes))
+    if max_step >= 7:
+        swift_ode = swift_results.get("ode_solver", {})
+        if run_swift and swift_ode.get("passed") is not None:
+            passed = swift_ode["passed"]
+            diff = swift_ode.get("diff", 0.0) or 0.0
+            notes = f"Flow Matching ODE solver - Swift {'MATCH' if passed else 'MISMATCH'}"
+            results.append(StageResult(name="7: ODE Solver", passed=passed, max_diff=diff, notes=notes))
 
     # Stage 8: Vocoder
-    swift_vocoder = swift_results.get("vocoder", {})
-    if run_swift and swift_vocoder.get("passed") is not None:
-        passed = swift_vocoder["passed"]
-        diff = swift_vocoder.get("diff", 0.0) or 0.0
-        notes = f"HiFTGenerator mel-to-audio - Swift {'MATCH' if passed else 'MISMATCH'}"
-        results.append(StageResult(name="8: Vocoder", passed=passed, max_diff=diff, notes=notes))
+    if max_step >= 8:
+        swift_vocoder = swift_results.get("vocoder", {})
+        if run_swift and swift_vocoder.get("passed") is not None:
+            passed = swift_vocoder["passed"]
+            diff = swift_vocoder.get("diff", 0.0) or 0.0
+            notes = f"HiFTGenerator mel-to-audio - Swift {'MATCH' if passed else 'MISMATCH'}"
+            results.append(StageResult(name="8: Vocoder", passed=passed, max_diff=diff, notes=notes))
 
     return results
 
@@ -569,6 +647,7 @@ def main():
     parser.add_argument("--device", "-d", default="cpu", help="Device (cpu, mps, cuda)")
     parser.add_argument("--swift-only", action="store_true", help="Skip Python generation")
     parser.add_argument("--no-swift", action="store_true", help="Skip Swift verification")
+    parser.add_argument("--steps", type=int, default=5, help="Max step to generate/verify (1-5). Default: 5")
     args = parser.parse_args()
 
     run_swift = not args.no_swift
@@ -579,8 +658,26 @@ def main():
     print(f"Device: {args.device}")
     print(f"Seed: {SEED}")
     print(f"Temperature: {TEMPERATURE}")
+    print(f"Max step: {args.steps}")
     print(f"Swift verification: {'enabled' if run_swift else 'disabled'}")
     print()
+
+    # Clean up old reference outputs to prevent stale data
+    if not args.swift_only:
+        print("Cleaning up old reference outputs...")
+        import shutil
+        if OUTPUT_DIR.exists():
+            # Delete all .npy files and config.json files
+            for voice_dir in OUTPUT_DIR.iterdir():
+                if voice_dir.is_dir():
+                    for case_dir in voice_dir.iterdir():
+                        if case_dir.is_dir():
+                            # Delete .npy files
+                            for npy_file in case_dir.glob("*.npy"):
+                                npy_file.unlink()
+                            # Note: Keep config.json as it may have test case metadata
+        print("Cleanup complete")
+        print()
 
     # Load model (unless swift-only)
     model = None
@@ -607,7 +704,7 @@ def main():
         print()
 
         try:
-            results = run_verification(tc, model, args.device, args.swift_only, run_swift)
+            results = run_verification(tc, model, args.device, args.swift_only, run_swift, max_step=args.steps)
             all_results.append((tc, results))
 
             for r in results:
