@@ -1,0 +1,14 @@
+{
+  "text": "Ep\u00e4j\u00e4rjestelm\u00e4llistytt\u00e4m\u00e4tt\u00f6myydell\u00e4\u00e4ns\u00e4k\u00e4\u00e4n.",
+  "voice": "samantha",
+  "language": "fi",
+  "sentence_id": "fi_complex_3",
+  "seed": 42,
+  "temperature": 0.001,
+  "step1_text_original": "Ep\u00e4j\u00e4rjestelm\u00e4llistytt\u00e4m\u00e4tt\u00f6myydell\u00e4\u00e4ns\u00e4k\u00e4\u00e4n.",
+  "step1_text_after_punc_norm": "Ep\u00e4j\u00e4rjestelm\u00e4llistytt\u00e4m\u00e4tt\u00f6myydell\u00e4\u00e4ns\u00e4k\u00e4\u00e4n.",
+  "step1_language_id": "fi",
+  "step1_token_count": 47,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
+}

@@ -1,0 +1,14 @@
+{
+  "text": "Wanafunzi wote wamefaulu mtihani wao wa mwisho.",
+  "voice": "samantha",
+  "language": "sw",
+  "sentence_id": "sw_complex_3",
+  "seed": 42,
+  "temperature": 0.001,
+  "step1_text_original": "Wanafunzi wote wamefaulu mtihani wao wa mwisho.",
+  "step1_text_after_punc_norm": "Wanafunzi wote wamefaulu mtihani wao wa mwisho.",
+  "step1_language_id": "sw",
+  "step1_token_count": 40,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
+}

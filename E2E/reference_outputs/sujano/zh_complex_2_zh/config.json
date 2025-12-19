@@ -1,0 +1,14 @@
+{
+  "text": "\ud842\udfb7 (Ext-B) \u662f\u4e00\u4e2a\u975e\u5e38\u7f55\u89c1\u7684\u6c49\u5b57\u3002",
+  "voice": "sujano",
+  "language": "zh",
+  "sentence_id": "zh_complex_2",
+  "seed": 42,
+  "temperature": 0.001,
+  "step1_text_original": "\ud842\udfb7 (Ext-B) \u662f\u4e00\u4e2a\u975e\u5e38\u7f55\u89c1\u7684\u6c49\u5b57\u3002",
+  "step1_text_after_punc_norm": "\ud842\udfb7 (Ext-B) \u662f\u4e00\u4e2a\u975e\u5e38\u7f55\u89c1\u7684\u6c49\u5b57\u3002",
+  "step1_language_id": "zh",
+  "step1_token_count": 67,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
+}

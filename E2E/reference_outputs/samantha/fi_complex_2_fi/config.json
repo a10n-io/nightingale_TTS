@@ -1,0 +1,14 @@
+{
+  "text": "H\u00e4\u00e4y\u00f6aie on suomen kielen vaikein sana.",
+  "voice": "samantha",
+  "language": "fi",
+  "sentence_id": "fi_complex_2",
+  "seed": 42,
+  "temperature": 0.001,
+  "step1_text_original": "H\u00e4\u00e4y\u00f6aie on suomen kielen vaikein sana.",
+  "step1_text_after_punc_norm": "H\u00e4\u00e4y\u00f6aie on suomen kielen vaikein sana.",
+  "step1_language_id": "fi",
+  "step1_token_count": 32,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
+}

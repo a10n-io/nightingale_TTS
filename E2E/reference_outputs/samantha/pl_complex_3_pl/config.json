@@ -1,0 +1,14 @@
+{
+  "text": "Chrz\u0105szcz brzmi w trzcinie w Szczebrzeszynie.",
+  "voice": "samantha",
+  "language": "pl",
+  "sentence_id": "pl_complex_3",
+  "seed": 42,
+  "temperature": 0.001,
+  "step1_text_original": "Chrz\u0105szcz brzmi w trzcinie w Szczebrzeszynie.",
+  "step1_text_after_punc_norm": "Chrz\u0105szcz brzmi w trzcinie w Szczebrzeszynie.",
+  "step1_language_id": "pl",
+  "step1_token_count": 39,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
+}

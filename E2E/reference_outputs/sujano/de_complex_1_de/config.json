@@ -1,0 +1,14 @@
+{
+  "text": "Hallo Welt.",
+  "voice": "sujano",
+  "language": "de",
+  "sentence_id": "de_complex_1",
+  "seed": 42,
+  "temperature": 0.001,
+  "step1_text_original": "Hallo Welt.",
+  "step1_text_after_punc_norm": "Hallo Welt.",
+  "step1_language_id": "de",
+  "step1_token_count": 9,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
+}

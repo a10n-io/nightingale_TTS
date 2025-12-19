@@ -1,0 +1,14 @@
+{
+  "text": "R\u00e4ksm\u00f6rg\u00e5s \u00e4r en svensk klassiker.",
+  "voice": "sujano",
+  "language": "sv",
+  "sentence_id": "sv_complex_2",
+  "seed": 42,
+  "temperature": 0.001,
+  "step1_text_original": "R\u00e4ksm\u00f6rg\u00e5s \u00e4r en svensk klassiker.",
+  "step1_text_after_punc_norm": "R\u00e4ksm\u00f6rg\u00e5s \u00e4r en svensk klassiker.",
+  "step1_language_id": "sv",
+  "step1_token_count": 32,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
+}

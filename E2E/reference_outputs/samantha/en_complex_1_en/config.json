@@ -1,0 +1,14 @@
+{
+  "text": "Hello world.",
+  "voice": "samantha",
+  "language": "en",
+  "sentence_id": "en_complex_1",
+  "seed": 42,
+  "temperature": 0.001,
+  "step1_text_original": "Hello world.",
+  "step1_text_after_punc_norm": "Hello world.",
+  "step1_language_id": "en",
+  "step1_token_count": 8,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
+}

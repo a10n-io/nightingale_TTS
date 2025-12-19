@@ -1,0 +1,14 @@
+{
+  "text": "Hei verden.",
+  "voice": "samantha",
+  "language": "no",
+  "sentence_id": "no_complex_1",
+  "seed": 42,
+  "temperature": 0.001,
+  "step1_text_original": "Hei verden.",
+  "step1_text_after_punc_norm": "Hei verden.",
+  "step1_language_id": "no",
+  "step1_token_count": 8,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
+}

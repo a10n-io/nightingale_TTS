@@ -1,0 +1,14 @@
+{
+  "text": "I\u015f\u0131k \u0131l\u0131k s\u00fct i\u00e7ti (Tests dotted/dotless I).",
+  "voice": "sujano",
+  "language": "tr",
+  "sentence_id": "tr_complex_3",
+  "seed": 42,
+  "temperature": 0.001,
+  "step1_text_original": "I\u015f\u0131k \u0131l\u0131k s\u00fct i\u00e7ti (Tests dotted/dotless I).",
+  "step1_text_after_punc_norm": "I\u015f\u0131k \u0131l\u0131k s\u00fct i\u00e7ti (Tests dotted/dotless I).",
+  "step1_language_id": "tr",
+  "step1_token_count": 36,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
+}

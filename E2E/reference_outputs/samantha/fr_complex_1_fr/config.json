@@ -1,0 +1,14 @@
+{
+  "text": "Bonjour le monde.",
+  "voice": "samantha",
+  "language": "fr",
+  "sentence_id": "fr_complex_1",
+  "seed": 42,
+  "temperature": 0.001,
+  "step1_text_original": "Bonjour le monde.",
+  "step1_text_after_punc_norm": "Bonjour le monde.",
+  "step1_language_id": "fr",
+  "step1_token_count": 12,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
+}

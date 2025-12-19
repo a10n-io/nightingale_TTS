@@ -1,0 +1,14 @@
+{
+  "text": "Perch\u00e9 non andiamo a prendere un caff\u00e8 in citt\u00e0?",
+  "voice": "sujano",
+  "language": "it",
+  "sentence_id": "it_complex_3",
+  "seed": 42,
+  "temperature": 0.001,
+  "step1_text_original": "Perch\u00e9 non andiamo a prendere un caff\u00e8 in citt\u00e0?",
+  "step1_text_after_punc_norm": "Perch\u00e9 non andiamo a prendere un caff\u00e8 in citt\u00e0?",
+  "step1_language_id": "it",
+  "step1_token_count": 37,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
+}

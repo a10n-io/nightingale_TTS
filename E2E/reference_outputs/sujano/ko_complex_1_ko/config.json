@@ -1,0 +1,14 @@
+{
+  "text": "\uc548\ub155\ud558\uc138\uc694 \uc138\uc0c1.",
+  "voice": "sujano",
+  "language": "ko",
+  "sentence_id": "ko_complex_1",
+  "seed": 42,
+  "temperature": 0.001,
+  "step1_text_original": "\uc548\ub155\ud558\uc138\uc694 \uc138\uc0c1.",
+  "step1_text_after_punc_norm": "\uc548\ub155\ud558\uc138\uc694 \uc138\uc0c1.",
+  "step1_language_id": "ko",
+  "step1_token_count": 20,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
+}

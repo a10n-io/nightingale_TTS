@@ -4,5 +4,11 @@
   "language": "nl",
   "sentence_id": "expressive_surprise",
   "seed": 42,
-  "temperature": 0.001
+  "temperature": 0.001,
+  "step1_text_original": "Wauw! Ik kan absoluut niet geloven dat het in \u00e9\u00e9n keer werkte!",
+  "step1_text_after_punc_norm": "Wauw! Ik kan absoluut niet geloven dat het in \u00e9\u00e9n keer werkte!",
+  "step1_language_id": "nl",
+  "step1_token_count": 49,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
 }

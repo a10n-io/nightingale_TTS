@@ -1,0 +1,14 @@
+{
+  "text": "Die Stra\u00dfe ist nass, aber der Spa\u00df h\u00f6rt nie auf.",
+  "voice": "samantha",
+  "language": "de",
+  "sentence_id": "de_complex_2",
+  "seed": 42,
+  "temperature": 0.001,
+  "step1_text_original": "Die Stra\u00dfe ist nass, aber der Spa\u00df h\u00f6rt nie auf.",
+  "step1_text_after_punc_norm": "Die Stra\u00dfe ist nass, aber der Spa\u00df h\u00f6rt nie auf.",
+  "step1_language_id": "de",
+  "step1_token_count": 40,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
+}

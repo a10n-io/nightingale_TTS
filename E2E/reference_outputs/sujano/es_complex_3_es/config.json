@@ -1,0 +1,14 @@
+{
+  "text": "\u00bfD\u00f3nde est\u00e1 la cig\u00fce\u00f1a que viv\u00eda en el campanario?",
+  "voice": "sujano",
+  "language": "es",
+  "sentence_id": "es_complex_3",
+  "seed": 42,
+  "temperature": 0.001,
+  "step1_text_original": "\u00bfD\u00f3nde est\u00e1 la cig\u00fce\u00f1a que viv\u00eda en el campanario?",
+  "step1_text_after_punc_norm": "\u00bfD\u00f3nde est\u00e1 la cig\u00fce\u00f1a que viv\u00eda en el campanario?",
+  "step1_language_id": "es",
+  "step1_token_count": 45,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
+}

@@ -1,0 +1,14 @@
+{
+  "text": "\u00c8 pi\u00f9 onest\u00e0 che abilit\u00e0 ci\u00f2 che cerchiamo.",
+  "voice": "samantha",
+  "language": "it",
+  "sentence_id": "it_complex_2",
+  "seed": 42,
+  "temperature": 0.001,
+  "step1_text_original": "\u00c8 pi\u00f9 onest\u00e0 che abilit\u00e0 ci\u00f2 che cerchiamo.",
+  "step1_text_after_punc_norm": "\u00c8 pi\u00f9 onest\u00e0 che abilit\u00e0 ci\u00f2 che cerchiamo.",
+  "step1_language_id": "it",
+  "step1_token_count": 38,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
+}

@@ -1,0 +1,14 @@
+{
+  "text": "\u015ei\u015feci, camlar\u0131 \u00f6zenle parlat\u0131yordu.",
+  "voice": "samantha",
+  "language": "tr",
+  "sentence_id": "tr_complex_2",
+  "seed": 42,
+  "temperature": 0.001,
+  "step1_text_original": "\u015ei\u015feci, camlar\u0131 \u00f6zenle parlat\u0131yordu.",
+  "step1_text_after_punc_norm": "\u015ei\u015feci, camlar\u0131 \u00f6zenle parlat\u0131yordu.",
+  "step1_language_id": "tr",
+  "step1_token_count": 32,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
+}

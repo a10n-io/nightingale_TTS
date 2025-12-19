@@ -1,0 +1,14 @@
+{
+  "text": "\uad1c\ucc2e\uc544, \ubaa8\ub4e0 \uac83\uc774 \uc798 \ub420 \uac70\uc57c.",
+  "voice": "samantha",
+  "language": "ko",
+  "sentence_id": "ko_complex_3",
+  "seed": 42,
+  "temperature": 0.001,
+  "step1_text_original": "\uad1c\ucc2e\uc544, \ubaa8\ub4e0 \uac83\uc774 \uc798 \ub420 \uac70\uc57c.",
+  "step1_text_after_punc_norm": "\uad1c\ucc2e\uc544, \ubaa8\ub4e0 \uac83\uc774 \uc798 \ub420 \uac70\uc57c.",
+  "step1_language_id": "ko",
+  "step1_token_count": 36,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
+}

@@ -1,0 +1,14 @@
+{
+  "text": "Bl\u00e5b\u00e6rgr\u00f8d med fl\u00f8de er en klassisk ret.",
+  "voice": "samantha",
+  "language": "da",
+  "sentence_id": "da_complex_2",
+  "seed": 42,
+  "temperature": 0.001,
+  "step1_text_original": "Bl\u00e5b\u00e6rgr\u00f8d med fl\u00f8de er en klassisk ret.",
+  "step1_text_after_punc_norm": "Bl\u00e5b\u00e6rgr\u00f8d med fl\u00f8de er en klassisk ret.",
+  "step1_language_id": "da",
+  "step1_token_count": 33,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
+}

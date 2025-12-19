@@ -1,0 +1,14 @@
+{
+  "text": "V\u00f3\u00f3r de wedstrijd begon, was er \u00e9\u00e9n minuut stilte.",
+  "voice": "sujano",
+  "language": "nl",
+  "sentence_id": "nl_complex_3",
+  "seed": 42,
+  "temperature": 0.001,
+  "step1_text_original": "V\u00f3\u00f3r de wedstrijd begon, was er \u00e9\u00e9n minuut stilte.",
+  "step1_text_after_punc_norm": "V\u00f3\u00f3r de wedstrijd begon, was er \u00e9\u00e9n minuut stilte.",
+  "step1_language_id": "nl",
+  "step1_token_count": 41,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
+}

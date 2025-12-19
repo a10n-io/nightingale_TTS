@@ -4,5 +4,11 @@
   "language": "nl",
   "sentence_id": "narrative_flow",
   "seed": 42,
-  "temperature": 0.001
+  "temperature": 0.001,
+  "step1_text_original": "Hoewel de reis lang en moeilijk was, bleven ze lopen, in de hoop een plek te vinden waar de sterren helderder schijnen.",
+  "step1_text_after_punc_norm": "Hoewel de reis lang en moeilijk was, bleven ze lopen, in de hoop een plek te vinden waar de sterren helderder schijnen.",
+  "step1_language_id": "nl",
+  "step1_token_count": 84,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
 }

@@ -1,0 +1,14 @@
+{
+  "text": "Hej v\u00e4rlden.",
+  "voice": "samantha",
+  "language": "sv",
+  "sentence_id": "sv_complex_1",
+  "seed": 42,
+  "temperature": 0.001,
+  "step1_text_original": "Hej v\u00e4rlden.",
+  "step1_text_after_punc_norm": "Hej v\u00e4rlden.",
+  "step1_language_id": "sv",
+  "step1_token_count": 11,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
+}

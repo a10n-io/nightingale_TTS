@@ -1,0 +1,14 @@
+{
+  "text": "\u00dcberm\u00e4\u00dfiger Genuss von S\u00fc\u00dfigkeiten schadet den Z\u00e4hnen.",
+  "voice": "samantha",
+  "language": "de",
+  "sentence_id": "de_complex_3",
+  "seed": 42,
+  "temperature": 0.001,
+  "step1_text_original": "\u00dcberm\u00e4\u00dfiger Genuss von S\u00fc\u00dfigkeiten schadet den Z\u00e4hnen.",
+  "step1_text_after_punc_norm": "\u00dcberm\u00e4\u00dfiger Genuss von S\u00fc\u00dfigkeiten schadet den Z\u00e4hnen.",
+  "step1_language_id": "de",
+  "step1_token_count": 46,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
+}

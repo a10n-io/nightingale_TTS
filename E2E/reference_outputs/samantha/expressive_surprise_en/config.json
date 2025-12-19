@@ -4,5 +4,11 @@
   "language": "en",
   "sentence_id": "expressive_surprise",
   "seed": 42,
-  "temperature": 0.001
+  "temperature": 0.001,
+  "step1_text_original": "Wow! I absolutely cannot believe that it worked on the first try!",
+  "step1_text_after_punc_norm": "Wow! I absolutely cannot believe that it worked on the first try!",
+  "step1_language_id": "en",
+  "step1_token_count": 41,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
 }

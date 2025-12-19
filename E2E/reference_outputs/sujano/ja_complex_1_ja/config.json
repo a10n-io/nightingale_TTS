@@ -1,0 +1,14 @@
+{
+  "text": "\u3053\u3093\u306b\u3061\u306f\u4e16\u754c\u3002",
+  "voice": "sujano",
+  "language": "ja",
+  "sentence_id": "ja_complex_1",
+  "seed": 42,
+  "temperature": 0.001,
+  "step1_text_original": "\u3053\u3093\u306b\u3061\u306f\u4e16\u754c\u3002",
+  "step1_text_after_punc_norm": "\u3053\u3093\u306b\u3061\u306f\u4e16\u754c\u3002",
+  "step1_language_id": "ja",
+  "step1_token_count": 10,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
+}

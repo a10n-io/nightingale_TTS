@@ -1,0 +1,14 @@
+{
+  "text": "\u00c9 necess\u00e1rio ter paci\u00eancia para alcan\u00e7ar a perfei\u00e7\u00e3o.",
+  "voice": "sujano",
+  "language": "pt",
+  "sentence_id": "pt_complex_3",
+  "seed": 42,
+  "temperature": 0.001,
+  "step1_text_original": "\u00c9 necess\u00e1rio ter paci\u00eancia para alcan\u00e7ar a perfei\u00e7\u00e3o.",
+  "step1_text_after_punc_norm": "\u00c9 necess\u00e1rio ter paci\u00eancia para alcan\u00e7ar a perfei\u00e7\u00e3o.",
+  "step1_language_id": "pt",
+  "step1_token_count": 43,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
+}

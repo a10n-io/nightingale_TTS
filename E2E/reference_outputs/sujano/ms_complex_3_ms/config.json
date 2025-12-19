@@ -1,0 +1,14 @@
+{
+  "text": "Kucing itu mengejar tikus di bawah meja makan.",
+  "voice": "sujano",
+  "language": "ms",
+  "sentence_id": "ms_complex_3",
+  "seed": 42,
+  "temperature": 0.001,
+  "step1_text_original": "Kucing itu mengejar tikus di bawah meja makan.",
+  "step1_text_after_punc_norm": "Kucing itu mengejar tikus di bawah meja makan.",
+  "step1_language_id": "ms",
+  "step1_token_count": 36,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
+}

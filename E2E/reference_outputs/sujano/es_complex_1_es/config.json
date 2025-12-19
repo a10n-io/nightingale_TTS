@@ -1,0 +1,14 @@
+{
+  "text": "Hola mundo.",
+  "voice": "sujano",
+  "language": "es",
+  "sentence_id": "es_complex_1",
+  "seed": 42,
+  "temperature": 0.001,
+  "step1_text_original": "Hola mundo.",
+  "step1_text_after_punc_norm": "Hola mundo.",
+  "step1_language_id": "es",
+  "step1_token_count": 10,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
+}

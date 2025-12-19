@@ -1,0 +1,14 @@
+{
+  "text": "The \ufb01shing boat maneuvers through the alg\u00e6.",
+  "voice": "samantha",
+  "language": "en",
+  "sentence_id": "en_complex_2",
+  "seed": 42,
+  "temperature": 0.001,
+  "step1_text_original": "The \ufb01shing boat maneuvers through the alg\u00e6.",
+  "step1_text_after_punc_norm": "The \ufb01shing boat maneuvers through the alg\u00e6.",
+  "step1_language_id": "en",
+  "step1_token_count": 27,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
+}

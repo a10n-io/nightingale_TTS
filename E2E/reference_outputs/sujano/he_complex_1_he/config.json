@@ -1,0 +1,14 @@
+{
+  "text": "\u05e9\u05dc\u05d5\u05dd \u05e2\u05d5\u05dc\u05dd.",
+  "voice": "sujano",
+  "language": "he",
+  "sentence_id": "he_complex_1",
+  "seed": 42,
+  "temperature": 0.001,
+  "step1_text_original": "\u05e9\u05dc\u05d5\u05dd \u05e2\u05d5\u05dc\u05dd.",
+  "step1_text_after_punc_norm": "\u05e9\u05dc\u05d5\u05dd \u05e2\u05d5\u05dc\u05dd.",
+  "step1_language_id": "he",
+  "step1_token_count": 11,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
+}

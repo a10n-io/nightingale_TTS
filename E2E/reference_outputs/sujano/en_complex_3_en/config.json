@@ -1,0 +1,14 @@
+{
+  "text": "It\u2019s naive to think that the fa\u00e7ade won\u2019t crack eventually.",
+  "voice": "sujano",
+  "language": "en",
+  "sentence_id": "en_complex_3",
+  "seed": 42,
+  "temperature": 0.001,
+  "step1_text_original": "It\u2019s naive to think that the fa\u00e7ade won\u2019t crack eventually.",
+  "step1_text_after_punc_norm": "It's naive to think that the fa\u00e7ade won't crack eventually.",
+  "step1_language_id": "en",
+  "step1_token_count": 40,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
+}

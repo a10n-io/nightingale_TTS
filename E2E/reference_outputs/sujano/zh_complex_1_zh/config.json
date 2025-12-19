@@ -1,0 +1,14 @@
+{
+  "text": "\u4f60\u597d\u4e16\u754c\u3002",
+  "voice": "sujano",
+  "language": "zh",
+  "sentence_id": "zh_complex_1",
+  "seed": 42,
+  "temperature": 0.001,
+  "step1_text_original": "\u4f60\u597d\u4e16\u754c\u3002",
+  "step1_text_after_punc_norm": "\u4f60\u597d\u4e16\u754c\u3002",
+  "step1_language_id": "zh",
+  "step1_token_count": 20,
+  "step1_sot_token": 255,
+  "step1_eot_token": 0
+}
