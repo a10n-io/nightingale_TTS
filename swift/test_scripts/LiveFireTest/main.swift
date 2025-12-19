@@ -10,8 +10,8 @@ print(String(repeating: "=", count: 80))
 print()
 
 // Paths
-let modelPath = "/Users/a10n/Projects/nightingale/models"
-let liveFireDir = "/Users/a10n/Projects/nightingale/verification_outputs/live_fire"
+let modelPath = "/Users/a10n/Projects/nightingale_TTS/models/mlx"
+let liveFireDir = "/Users/a10n/Projects/nightingale_TTS/verification_outputs/live_fire"
 
 // Configuration - MUST MATCH Python
 let nTimesteps = 10
@@ -75,7 +75,13 @@ for (key, value) in completeDecoderWeights {
     // CRITICAL: Python's pre-FFN LayerNorm is called "norm3", Swift calls it "norm2"
     remappedKey = remappedKey.replacingOccurrences(of: ".norm3.", with: ".norm2.")
 
-    decoderWeights[remappedKey] = value
+    // CRITICAL: Transpose all 2D weights (Linear layers) from PyTorch [out, in] to MLX [in, out]
+    if value.ndim == 2 && remappedKey.contains(".weight") {
+        print("  Transposing \(remappedKey): \(value.shape) -> \(value.T.shape)")
+        decoderWeights[remappedKey] = value.T
+    } else {
+        decoderWeights[remappedKey] = value
+    }
 }
 
 let decoderParams = ModuleParameters.unflattened(decoderWeights)

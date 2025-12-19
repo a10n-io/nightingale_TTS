@@ -138,8 +138,8 @@ public class Snake: Module, UnaryLayer {
 }
 
 public class TimeMLP: Module {
-    let linear1: FixedLinear
-    let linear2: FixedLinear
+    public let linear1: FixedLinear
+    public let linear2: FixedLinear
     let inputDim: Int
 
     public init(inputDim: Int = 320, embDim: Int = 1024) {
@@ -172,7 +172,7 @@ public class TimeMLP: Module {
 
 public class FlowMLP: Module {
     // Use array for weight loading compatibility
-    let layers: [FixedLinear]
+    public let layers: [FixedLinear]
 
     public static var debugEnabled: Bool = false
 
@@ -950,7 +950,7 @@ public class CausalBlock1D: Module {
 public class CausalResNetBlock: Module {
     let block1: CausalBlock1D
     let block2: CausalBlock1D
-    let mlpLinear: FixedLinear
+    public let mlpLinear: FixedLinear
     let resConv: Conv1d  // Use regular Conv1d like Python (not CausalConv1d)
 
     public init(dim: Int, dimOut: Int, timeEmbDim: Int) {
@@ -1370,7 +1370,7 @@ public class ResBlock: Module {
 
 public class ConvRNNF0Predictor: Module {
     let convs: [Conv1d]
-    let classifier: Linear
+    let classifier: FixedLinear
     
     public init(inChannels: Int = 80, condChannels: Int = 512) {
         var c: [Conv1d] = []
@@ -1381,7 +1381,7 @@ public class ConvRNNF0Predictor: Module {
             c.append(Conv1d(inputChannels: condChannels, outputChannels: condChannels, kernelSize: 3, padding: 1))
         }
         self.convs = c
-        self.classifier = Linear(condChannels, 1)
+        self.classifier = FixedLinear(condChannels, 1, name: "ConvRNNF0Predictor.classifier")
         super.init()
     }
     
@@ -1458,11 +1458,11 @@ public class SineGen: Module {
 
 public class SourceModuleHnNSF: Module {
     let sineGen: SineGen
-    let linear: Linear
+    let linear: FixedLinear
     
     public init(samplingRate: Int, harmonicNum: Int = 8, sineAmp: Float = 0.1, noiseStd: Float = 0.003) {
         self.sineGen = SineGen(samplingRate: Float(samplingRate), harmonicNum: harmonicNum, sineAmp: sineAmp, noiseStd: noiseStd)
-        self.linear = Linear(harmonicNum + 1, 1) // H+1 inputs -> 1 output
+        self.linear = FixedLinear(harmonicNum + 1, 1, name: "SourceModuleHnNSF.linear") // H+1 inputs -> 1 output
         super.init()
     }
     
@@ -1807,8 +1807,8 @@ public class Mel2Wav: Module {
 public class S3Gen: Module {
     public let inputEmbedding: Embedding
     public let encoder: UpsampleEncoder  // Using UpsampleEncoder (matches Python's UpsampleConformerEncoder)
-    public let encoderProj: Linear
-    public let spkEmbedAffine: Linear
+    public let encoderProj: FixedLinear
+    public let spkEmbedAffine: FixedLinear
     public let decoder: FlowMatchingDecoder
     public let vocoder: Mel2Wav
 
@@ -1865,8 +1865,8 @@ public class S3Gen: Module {
         self.encoder.load(weights: encoderWeights, prefix: "encoder")
         print("DEBUG S3Gen: encoder.load() completed"); fflush(stdout)
 
-        print("DEBUG S3Gen: Creating encoderProj Linear(\(config.inputDim), \(config.melChannels))..."); fflush(stdout)
-        self.encoderProj = Linear(config.inputDim, config.melChannels)
+        print("DEBUG S3Gen: Creating encoderProj FixedLinear(\(config.inputDim), \(config.melChannels))..."); fflush(stdout)
+        self.encoderProj = FixedLinear(config.inputDim, config.melChannels, name: "S3Gen.encoderProj")
         print("DEBUG S3Gen: encoderProj created"); fflush(stdout)
         // Load encoderProj weights
         print("DEBUG S3Gen: About to iterate flowWeights for encoderProj..."); fflush(stdout)
@@ -1897,8 +1897,8 @@ public class S3Gen: Module {
         }
         print("DEBUG S3Gen: encoderProj weights loaded"); fflush(stdout)
 
-        print("DEBUG S3Gen: Creating spkEmbedAffine Linear(192, \(config.melChannels))..."); fflush(stdout)
-        self.spkEmbedAffine = Linear(192, config.melChannels)
+        print("DEBUG S3Gen: Creating spkEmbedAffine FixedLinear(192, \(config.melChannels))..."); fflush(stdout)
+        self.spkEmbedAffine = FixedLinear(192, config.melChannels, name: "S3Gen.spkEmbedAffine")
         print("DEBUG S3Gen: spkEmbedAffine created"); fflush(stdout)
 
         // Load spk_embed_affine_layer weights

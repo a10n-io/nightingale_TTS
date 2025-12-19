@@ -305,6 +305,7 @@ func remapS3Keys(_ weights: [String: MLXArray]) -> [String: MLXArray] {
 
             if isLinear {
                 let transposedWeight = value.T
+                eval(transposedWeight)  // CRITICAL: Force evaluation to prevent lazy transpose bugs
                 print("🔧 Transposing Linear weight \(newKey): \(value.shape) → \(transposedWeight.shape)")
                 remapped[newKey] = transposedWeight
             } else {
@@ -584,6 +585,12 @@ func loadS3GenModel() throws -> S3Gen {
     }
 
     print("✅ S3Gen model loaded"); fflush(stdout)
+
+    // 🔍 GHOST HUNT: Try to trigger ghost IMMEDIATELY after loading
+    print("🔍 GHOST HUNT: Attempting to access a simple MLXArray.shape to trigger ghost..."); fflush(stdout)
+    let testArray = MLXArray([1, 2, 3])
+    print("  testArray.shape: \(testArray.shape)"); fflush(stdout)
+    print("  ✅ No crash on simple array"); fflush(stdout)
 
     // REMOVED encoder/decoder tests - they create lingering computation graphs
 
@@ -920,6 +927,12 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
         let tokenEmb = s3gen!.inputEmbedding(tokensInt32)
         debugShape("tokenEmb_AFTER_EMBEDDING", tokenEmb)
 
+        // 🔍 GHOST HUNT: Test if ghost exists after tokenEmb
+        print("🔍 GHOST HUNT: After tokenEmb, testing shape access..."); fflush(stdout)
+        let testArray1 = MLXArray([1.0, 2.0])
+        print("  testArray1.shape: \(testArray1.shape)"); fflush(stdout)
+        print("  ✅ No ghost yet"); fflush(stdout)
+
         // 3. Speaker embedding projection
         print("About to process speaker embedding..."); fflush(stdout)
         var spkEmb = soul_s3
@@ -987,6 +1000,12 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
         }
         print("🔬 === END SURGICAL REWRITE ===\n"); fflush(stdout)
 
+        // 🔍 GHOST HUNT: Test if ghost exists after spkEmbProj
+        print("🔍 GHOST HUNT: After spkEmbProj, testing shape access..."); fflush(stdout)
+        let testArray2 = MLXArray([3.0, 4.0, 5.0])
+        print("  testArray2.shape: \(testArray2.shape)"); fflush(stdout)
+        print("  ✅ No ghost after spkEmbProj\n"); fflush(stdout)
+
         // Evaluate each tensor individually to find which causes the broadcast error
         print("\nEvaluating tensors individually..."); fflush(stdout)
 
@@ -1038,82 +1057,67 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
 
         print("DEBUG: After printing all shapes"); fflush(stdout)
 
-        // Force eager evaluation of ALL s3gen parameters to prevent lazy eval crashes
-        print("DEBUG: Forcing evaluation of all s3gen parameters..."); fflush(stdout)
-        eval(s3gen!.inputEmbedding.weight)
-        print("  ✅ inputEmbedding.weight evaluated"); fflush(stdout)
-        eval(s3gen!.spkEmbedAffine.weight)
-        print("  ✅ spkEmbedAffine.weight evaluated"); fflush(stdout)
-
-        // Evaluate encoder positional encodings
-        print("DEBUG: Evaluating encoder.posEnc.pe..."); fflush(stdout)
-        eval(s3gen!.encoder.posEnc.pe)
-        print("  ✅ encoder.posEnc.pe evaluated"); fflush(stdout)
-
-        print("DEBUG: Evaluating encoder.upPosEnc.pe..."); fflush(stdout)
-        eval(s3gen!.encoder.upPosEnc.pe)
-        print("  ✅ encoder.upPosEnc.pe evaluated"); fflush(stdout)
-
-        // Note: encoder attention biases are internal and can't be evaluated directly from here
-
-        // Also evaluate ALL decoder attention parameters to prevent deferred operations
-        print("DEBUG: Evaluating decoder parameters..."); fflush(stdout)
-
-        // Evaluate all attention layers only (resnet blocks are internal and inaccessible)
-        for (blockIdx, block) in s3gen!.decoder.downBlocks.enumerated() {
-            for (tfmrIdx, tfmr) in block.transformers.enumerated() {
-                eval(tfmr.attention.queryProj.weight, tfmr.attention.keyProj.weight,
-                     tfmr.attention.valueProj.weight, tfmr.attention.outProj.weight)
-            }
+        // 🔍 CHECK ENCODER WEIGHTS FOR GHOST
+        print("🔍 Checking encoderProj weight shape after loading:"); fflush(stdout)
+        print("  encoderProj.weight.shape: \(s3gen!.encoderProj.weight.shape)"); fflush(stdout)
+        print("  Expected: [512, 80]"); fflush(stdout)
+        if s3gen!.encoderProj.weight.shape != [512, 80] {
+            print("🚨 BUG FOUND! encoderProj has wrong shape!"); fflush(stdout)
+            fatalError("encoderProj.weight has wrong shape: \(s3gen!.encoderProj.weight.shape)")
         }
-        print("  ✅ downBlocks attention evaluated"); fflush(stdout)
 
-        for (blockIdx, block) in s3gen!.decoder.midBlocks.enumerated() {
-            for (tfmrIdx, tfmr) in block.transformers.enumerated() {
-                eval(tfmr.attention.queryProj.weight, tfmr.attention.keyProj.weight,
-                     tfmr.attention.valueProj.weight, tfmr.attention.outProj.weight)
-            }
+        print("🔍 Checking spkEmbedAffine weight shape after loading:"); fflush(stdout)
+        print("  spkEmbedAffine.weight.shape: \(s3gen!.spkEmbedAffine.weight.shape)"); fflush(stdout)
+        print("  Expected: [192, 80]"); fflush(stdout)
+        if s3gen!.spkEmbedAffine.weight.shape != [192, 80] {
+            print("🚨 BUG FOUND! spkEmbedAffine has wrong shape!"); fflush(stdout)
+            fatalError("spkEmbedAffine.weight has wrong shape: \(s3gen!.spkEmbedAffine.weight.shape)")
         }
-        print("  ✅ midBlocks attention evaluated"); fflush(stdout)
 
-        for (blockIdx, block) in s3gen!.decoder.upBlocks.enumerated() {
-            for (tfmrIdx, tfmr) in block.transformers.enumerated() {
-                eval(tfmr.attention.queryProj.weight, tfmr.attention.keyProj.weight,
-                     tfmr.attention.valueProj.weight, tfmr.attention.outProj.weight)
-            }
-        }
-        print("  ✅ upBlocks attention evaluated"); fflush(stdout)
+        print("  ✅ Both weights have correct shapes"); fflush(stdout)
 
-        print("DEBUG: All decoder attention parameters evaluated"); fflush(stdout)
+        // TEMPORARILY DISABLED TO FIND GHOST SOURCE
+        print("DEBUG: SKIPPING decoder parameter evaluation..."); fflush(stdout)
+        // for (blockIdx, block) in s3gen!.decoder.downBlocks.enumerated() {
+        //     for (tfmrIdx, tfmr) in block.transformers.enumerated() {
+        //         eval(tfmr.attention.queryProj.weight, tfmr.attention.keyProj.weight,
+        //              tfmr.attention.valueProj.weight, tfmr.attention.outProj.weight)
+        //     }
+        // }
+        print("  ⚠️  decoder parameter evaluation skipped"); fflush(stdout)
+
+        // 🔍 COMPREHENSIVE VERIFICATION: TEMPORARILY DISABLED TO FIND GHOST
+        print("🔍 SKIPPING COMPREHENSIVE DECODER WEIGHT VERIFICATION"); fflush(stdout)
 
         // Try to force complete evaluation of the entire model
-        print("DEBUG: Forcing complete model evaluation..."); fflush(stdout)
-        eval(s3gen!)
-        print("DEBUG: Complete model evaluated"); fflush(stdout)
+        print("DEBUG: SKIPPING eval(s3gen!) to test if it creates ghost tensor..."); fflush(stdout)
+        // eval(s3gen!)  // TEMPORARILY DISABLED
+        print("DEBUG: Skipped model evaluation"); fflush(stdout)
 
-        // ⚠️ SKIP Step 5 comparison due to MLX computation graph bug
-        // tokenEmb has deep dependencies on S3Gen encoder params that trigger broadcast error
-        print("DEBUG: About to print SKIPPING message"); fflush(stdout)
-        print("\n⚠️ SKIPPING Step 5 comparison due to MLX bug - proceeding to generation"); fflush(stdout)
-        print("DEBUG: About to print Step 5 SKIPPED"); fflush(stdout)
-        print("Step 5: ⚠️ SKIPPED (shapes correct, values not verified)"); fflush(stdout)
-        print("DEBUG: About to set step5Pass"); fflush(stdout)
-        // Force cleanup of all temporary arrays before assignment
-        autoreleasepool {
-            eval(fullTokens, tokenEmb, spkEmbProj)  // Force complete evaluation
+        // Step 5: Compare values with Python reference - NO SKIPS
+        print("\nComparing Step 5 with Python reference..."); fflush(stdout)
+
+        let ftDiff = maxDiff(fullTokens, refFullTokens)
+        let teDiff = maxDiff(tokenEmb, refTokenEmb)
+        let seDiff = maxDiff(spkEmbProj, refSpkEmb)
+
+        print("Comparison (max_diff):"); fflush(stdout)
+        print("  full_tokens: \(String(format: "%.2e", ftDiff))"); fflush(stdout)
+        print("  token_emb: \(String(format: "%.2e", teDiff))"); fflush(stdout)
+        print("  spk_emb_proj: \(String(format: "%.2e", seDiff))"); fflush(stdout)
+
+        let step5Threshold: Float = 0.001
+        if ftDiff < step5Threshold && teDiff < step5Threshold && seDiff < step5Threshold {
+            print("Step 5 (S3Gen Input): ✅ PASSED"); fflush(stdout)
+            step5Pass = true
+        } else {
+            print("Step 5 (S3Gen Input): ❌ FAILED"); fflush(stdout)
+            step5Pass = false
         }
-        print("DEBUG: Autorelease pool drained"); fflush(stdout)
-        step5Pass = true // Allow proceeding to Steps 6-8
-        print("DEBUG: step5Pass set to true"); fflush(stdout)
-        print("DEBUG: Line 943 executed"); fflush(stdout)
 
         // =========================================================================
-        // STEP 6: S3Gen Encoder - COMPLETELY DISABLED FOR DEBUGGING
+        // STEP 6: S3Gen Encoder - NO SKIPS, FAIL HONESTLY
         // =========================================================================
-        print("\n[Step 6: COMPLETELY SKIPPED FOR DEBUGGING]"); fflush(stdout)
-        step6Pass = true
-
-        if false { // Disable entire Step 6 block
         print("DEBUG: About to print Step 6 header"); fflush(stdout)
         print("\n" + String(repeating: "=", count: 80)); fflush(stdout)
         print("DEBUG: Printed first equals line"); fflush(stdout)
@@ -1159,36 +1163,48 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
             print("  x_cond: \(refXCond.shape)"); fflush(stdout)
             print("DEBUG: After printing x_cond shape"); fflush(stdout)
 
-            // NOTE: Swift encoder has a known issue with upEncoder attention shapes
-            // Skip running Swift encoder and use Python reference for downstream verification
-            print("DEBUG: About to print encoder warning"); fflush(stdout)
-            print("\n⚠️  Swift encoder has known shape issues in upEncoders")
-            print("   Using Python mu reference for downstream ODE/vocoder testing")
-            print("DEBUG: After printing encoder warning"); fflush(stdout)
+            // Run Swift encoder - NO CHEATING
+            print("\nRunning Swift encoder..."); fflush(stdout)
 
-            print("DEBUG: About to assign swiftMu = refMu"); fflush(stdout)
-            swiftMu = refMu  // Use Python reference
-            eval(swiftMu!)  // Force evaluation
-            print("DEBUG: After assigning swiftMu"); fflush(stdout)
+            // Get sequence length from tokenEmb
+            let seqLen = MLXArray(Int32(tokenEmb.shape[1]))
 
-            print("DEBUG: About to assign swiftXCond = refXCond"); fflush(stdout)
-            swiftXCond = refXCond
-            eval(swiftXCond!)  // Force evaluation
-            print("DEBUG: After assigning swiftXCond"); fflush(stdout)
+            // Run encoder
+            let swiftEncoderOut = s3gen!.encoder(tokenEmb, seqLen: seqLen)
+            eval(swiftEncoderOut)
+            print("Swift encoder output: \(swiftEncoderOut.shape)"); fflush(stdout)
 
-            // Mark as skipped but not failed (encoder issue is known)
-            print("DEBUG: About to set step6Pass"); fflush(stdout)
-            step6Pass = true  // Consider passed since we're using reference
-            print("DEBUG: After setting step6Pass"); fflush(stdout)
-            print("DEBUG: About to print Step 6 SKIPPED message"); fflush(stdout)
-            print("Step 6: ⏭️  SKIPPED (using Python reference for downstream)")
-            print("DEBUG: After printing Step 6 SKIPPED message"); fflush(stdout)
-            print("DEBUG: About to exit Step 6 if block"); fflush(stdout)
+            // Project to mel dimension
+            let swiftEncoderProj = s3gen!.encoderProj(swiftEncoderOut)
+            eval(swiftEncoderProj)
+            print("Swift encoder projection: \(swiftEncoderProj.shape)"); fflush(stdout)
+
+            // Prepare mu and x_cond from Swift encoder output
+            swiftMu = swiftEncoderProj  // [B, L, 80]
+            swiftXCond = swiftEncoderOut  // [B, L, 512]
+
+            // Compare with Python
+            let encoderDiff = maxDiff(swiftEncoderOut, refEncoderOut)
+            let muDiff = maxDiff(swiftMu!, refMu)
+            let xCondDiff = maxDiff(swiftXCond!, refXCond)
+
+            print("\nComparison (max_diff):"); fflush(stdout)
+            print("  encoder_out: \(String(format: "%.2e", encoderDiff))"); fflush(stdout)
+            print("  mu: \(String(format: "%.2e", muDiff))"); fflush(stdout)
+            print("  x_cond: \(String(format: "%.2e", xCondDiff))"); fflush(stdout)
+
+            let step6Threshold: Float = 0.001
+            if encoderDiff < step6Threshold && muDiff < step6Threshold && xCondDiff < step6Threshold {
+                print("Step 6 (Encoder): ✅ PASSED"); fflush(stdout)
+                step6Pass = true
+            } else {
+                print("Step 6 (Encoder): ❌ FAILED"); fflush(stdout)
+                step6Pass = false
+            }
         } else {
             print("[Step 6: S3Gen Encoder - SKIPPED (no reference)]")
+            step6Pass = false
         }
-        print("DEBUG: Exited Step 6 if block"); fflush(stdout)
-        } // End of `if false` - Step 6 completely disabled
 
         // =========================================================================
         // STEP 7a: Decoder Single Forward Pass
@@ -1248,21 +1264,48 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
             print("DEBUG: Assigned, checking ndim"); fflush(stdout)
             if spkEmbFor7a.ndim == 1 { spkEmbFor7a = spkEmbFor7a.expandedDimensions(axis: 0) }
             print("DEBUG: After ndim check"); fflush(stdout)
+
+            // GHOST HUNT: Check all tensor shapes BEFORE any computation
+            print("\n🔍 GHOST HUNT: Checking tensor shapes before spkEmbProj7a computation..."); fflush(stdout)
+            print("  soul_s3 (spkEmbFor7a): \(spkEmbFor7a.shape)"); fflush(stdout)
+            print("  s3gen!.spkEmbedAffine.weight: \(s3gen!.spkEmbedAffine.weight.shape)"); fflush(stdout)
+            print("  s3gen!.spkEmbedAffine.bias: \(s3gen!.spkEmbedAffine.bias!.shape)"); fflush(stdout)
+
             print("DEBUG: About to compute norm7a"); fflush(stdout)
             let norm7a = sqrt(sum(spkEmbFor7a * spkEmbFor7a, axis: 1, keepDims: true)) + 1e-8
             print("DEBUG: Computed norm7a"); fflush(stdout)
             let spkEmbNorm7a = spkEmbFor7a / norm7a
-            print("DEBUG: About to access s3gen.spkEmbedAffine"); fflush(stdout)
-            // WORKAROUND: Manual matmul since Linear.update() doesn't persist transpose
-            let spkEmbProj7a = matmul(spkEmbNorm7a, s3gen!.spkEmbedAffine.weight) + s3gen!.spkEmbedAffine.bias!
+            print("  spkEmbNorm7a: \(spkEmbNorm7a.shape)"); fflush(stdout)
+
+            print("DEBUG: About to manually compute matmul..."); fflush(stdout)
+            let matmulResult = matmul(spkEmbNorm7a, s3gen!.spkEmbedAffine.weight)
+            print("DEBUG: matmul done, about to check shape..."); fflush(stdout)
+            print("  matmulResult: \(matmulResult.shape)"); fflush(stdout)
+
+            print("DEBUG: About to add bias..."); fflush(stdout)
+            let spkEmbProj7a = matmulResult + s3gen!.spkEmbedAffine.bias!
             print("DEBUG: Computed spkEmbProj7a"); fflush(stdout)
             print("DEBUG: Skipping eval(spkEmbProj7a) to avoid broadcast error"); fflush(stdout)
             //eval(spkEmbProj7a)  // SKIPPED - triggers broadcast error from deferred operation
 
+            // GHOST HUNT: Test which tensor access triggers the error
+            print("\n🔍 GHOST HUNT: Testing which shape access triggers error..."); fflush(stdout)
+            print("DEBUG: About to access refInitialNoise7a.shape..."); fflush(stdout)
+            let testShape1 = refInitialNoise7a.shape
+            print("  ✅ refInitialNoise7a.shape OK: \(testShape1)"); fflush(stdout)
+
+            print("DEBUG: About to access refMuT.shape..."); fflush(stdout)
+            let testShape2 = refMuT.shape
+            print("  ✅ refMuT.shape OK: \(testShape2)"); fflush(stdout)
+
+            print("DEBUG: About to access spkEmbProj7a.shape..."); fflush(stdout)
+            let testShape3 = spkEmbProj7a.shape
+            print("  ✅ spkEmbProj7a.shape OK: \(testShape3)"); fflush(stdout)
+
             print("\nSwift inputs:")
-            print("  x (noise): \(refInitialNoise7a.shape)")
-            print("  mu: \(refMuT.shape)")
-            print("  spk_emb: \(spkEmbProj7a.shape)")
+            print("  x (noise): \(testShape1)")
+            print("  mu: \(testShape2)")
+            print("  spk_emb: \(testShape3)")
             print("  cond: \(refCondT.shape)")
             print("  t: 0.0")
 
@@ -1321,18 +1364,25 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
             print("  mel: \(refMel.shape)")
             print("  initial_noise: \(refInitialNoise.shape)")
 
-            // Use Python's mu and x_cond for fair comparison
-            let refMu = try NPYLoader.load(contentsOf: verifyURL.appendingPathComponent("step6_mu.npy"))
-            let refXCond = try NPYLoader.load(contentsOf: verifyURL.appendingPathComponent("step6_x_cond.npy"))
-
             // Set fixed noise to match Python
             s3gen!.setFixedNoise(refInitialNoise)
 
-            // Run ODE solver using generateWithPythonMu (uses Python mu for fair comparison)
-            // Note: generateWithPythonMu expects raw speaker embedding (192-dim), not pre-projected
-            let mel = s3gen!.generateWithPythonMu(
-                mu: refMu,
-                speakerEmb: soul_s3,  // Pass raw embedding, not spkEmbProj
+            // Use SWIFT encoder outputs - NO CHEATING
+            guard let mu = swiftMu else {
+                fatalError("swiftMu is nil - Step 6 must run before Step 7")
+            }
+            guard let xCond = swiftXCond else {
+                fatalError("swiftXCond is nil - Step 6 must run before Step 7")
+            }
+
+            // Run ODE solver with Swift encoder outputs
+            // Convert tokens back to int32 for generate() call
+            let tokensForGen = fullTokens.asType(.int32)
+            let mel = s3gen!.generate(
+                tokens: tokensForGen,
+                speakerEmb: soul_s3,
+                speechEmbMatrix: tokenEmb,
+                promptToken: prompt_token,
                 promptFeat: prompt_feat
             )
 
@@ -1383,9 +1433,18 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
             print("  audio: \(refAudio.shape)")
             print("  mel_trimmed: \(refMelTrimmed.shape)")
 
-            // Run Swift vocoder using Python's trimmed mel for fair comparison
+            // Use SWIFT mel output - NO CHEATING
+            guard let swiftMelOutput = swiftMel else {
+                fatalError("swiftMel is nil - Step 7 must run before Step 8")
+            }
+
+            // Trim mel like Python does (remove padding)
+            // Python trims based on prompt length - we'll use the reference shape to trim
+            let targetLen = refMelTrimmed.shape[1]
+            let swiftMelTrimmed = swiftMelOutput[0..<1, 0..<targetLen, 0..<80]
+
             // Vocoder expects [B, C, T] format
-            let melForVocoder = refMelTrimmed.transposed(0, 2, 1)  // [B, T, 80] -> [B, 80, T]
+            let melForVocoder = swiftMelTrimmed.transposed(0, 2, 1)  // [B, T, 80] -> [B, 80, T]
             let audio = s3gen!.vocoder(melForVocoder)
 
             eval(audio)
