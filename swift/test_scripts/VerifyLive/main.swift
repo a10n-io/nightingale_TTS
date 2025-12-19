@@ -1004,12 +1004,17 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
         let step3CFGWeight: Float = 0.5
         let step3RepPenalty: Float = 2.0
 
-        // Convert CFG tokens from [2, N] to MLXArray
-        let cfgTokensArray = MLXArray(cfgTokens.map { Int32($0) }).reshaped([2, cfgTokens.count / 2])
+        // IMPORTANT: T3Model.generate() expects SINGLE-batch text tokens [1, N+2]
+        // with SOT prepended and EOT appended, matching Python's prepare_input_embeds
+        // T3Model.generate() will handle CFG doubling internally
+        // Build single sequence: [SOT, ...tokens..., EOT]
+        var singleBatchTokens = [SOT] + swiftTokens.map { Int32($0) } + [EOT]
+        let textTokensArray = MLXArray(singleBatchTokens).expandedDimensions(axis: 0)
+        print("  Text tokens for T3: \(textTokensArray.shape) (single batch with SOT/EOT)")
 
-        // Run T3 generation (t3.generate handles conditioning internally)
+        // Run T3 generation (t3.generate handles conditioning AND CFG doubling internally)
         let swiftSpeechTokens = t3.generate(
-            textTokens: cfgTokensArray,
+            textTokens: textTokensArray,
             speakerEmb: soul_t3,
             condTokens: t3_cond_tokens,
             maxTokens: step3MaxTokens,

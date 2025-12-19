@@ -360,6 +360,7 @@ def run_swift_verification(test_case: TestCase) -> Tuple[bool, dict]:
         swift_results = {
             "tokenization": {"passed": False, "diff": None},
             "conditioning": {"passed": False, "diff": None},
+            "t3_generation": {"passed": False, "diff": None, "match_percent": None},
             "s3gen_input": {"passed": False, "diff": None},
             "encoder": {"passed": False, "diff": None},
             "decoder_forward": {"passed": False, "diff": None},
@@ -367,49 +368,75 @@ def run_swift_verification(test_case: TestCase) -> Tuple[bool, dict]:
             "vocoder": {"passed": False, "diff": None},
         }
 
-        # Check for step results
+        # Check for step results - EXTRACT REAL DIFF VALUES ONLY
         if "Step 1 (Tokenization): ✅ PASSED" in output:
             swift_results["tokenization"]["passed"] = True
-            swift_results["tokenization"]["diff"] = 0.0
+            swift_results["tokenization"]["diff"] = 0.0  # Tokenization is binary - exact match or fail
         elif "Step 1 (Tokenization): ❌" in output:
             swift_results["tokenization"]["passed"] = False
 
         if "Step 2 (Conditioning): ✅ PASSED" in output:
             swift_results["conditioning"]["passed"] = True
-            # Try to extract max_diff
-            match = re.search(r"final_cond: ([\d.e+-]+)", output)
+            # Extract REAL max_diff from output
+            match = re.search(r"final_cond max_diff: ([\d.e+-]+)", output)
             if match:
                 swift_results["conditioning"]["diff"] = float(match.group(1))
+            else:
+                # Fallback: try old format
+                match = re.search(r"final_cond: ([\d.e+-]+)", output)
+                if match:
+                    swift_results["conditioning"]["diff"] = float(match.group(1))
         elif "Step 2 (Conditioning): ❌" in output:
             swift_results["conditioning"]["passed"] = False
 
+        # Step 3: T3 Generation - extract real comparison results
+        if "Step 3 (T3 Generation): ✅ PASSED (exact match)" in output:
+            swift_results["t3_generation"]["passed"] = True
+            swift_results["t3_generation"]["diff"] = 0.0  # Exact match confirmed
+            swift_results["t3_generation"]["match_percent"] = 100.0
+        elif "Step 3 (T3 Generation): ⚠️  PARTIAL" in output or "Step 3 (T3 Generation): ❌" in output:
+            swift_results["t3_generation"]["passed"] = False
+            # Extract REAL match percentage from output
+            match = re.search(r"Matching tokens: \d+/\d+ \(([\d.]+)%\)", output)
+            if match:
+                swift_results["t3_generation"]["match_percent"] = float(match.group(1))
+                # For diff, use (100 - match_percent) as a metric
+                swift_results["t3_generation"]["diff"] = 100.0 - swift_results["t3_generation"]["match_percent"]
+
         if "Step 5 (S3Gen Input): ✅ PASSED" in output:
             swift_results["s3gen_input"]["passed"] = True
-            swift_results["s3gen_input"]["diff"] = 0.0
+            # Extract REAL max_diff values from output
+            diffs = []
+            for field in ["full_tokens", "token_emb", "spk_emb_proj"]:
+                match = re.search(rf"{field}: ([\d.e+-]+)", output)
+                if match:
+                    diffs.append(float(match.group(1)))
+            swift_results["s3gen_input"]["diff"] = max(diffs) if diffs else None
         elif "Step 5 (S3Gen Input): ❌" in output:
             swift_results["s3gen_input"]["passed"] = False
 
+        # Steps 6-8: Extract real diff values (to be implemented when refs exist)
         if "Step 6 (Encoder): ✅ PASSED" in output:
             swift_results["encoder"]["passed"] = True
-            swift_results["encoder"]["diff"] = 0.0
+            # TODO: Extract real diff when Step 6 refs are generated
         elif "Step 6 (Encoder): ❌" in output:
             swift_results["encoder"]["passed"] = False
 
         if "Step 7a (Decoder Forward): ✅ PASSED" in output:
             swift_results["decoder_forward"]["passed"] = True
-            swift_results["decoder_forward"]["diff"] = 0.0
+            # TODO: Extract real diff when Step 7a refs are generated
         elif "Step 7a (Decoder Forward): ❌" in output:
             swift_results["decoder_forward"]["passed"] = False
 
         if "Step 7 (ODE Solver): ✅ PASSED" in output:
             swift_results["ode_solver"]["passed"] = True
-            swift_results["ode_solver"]["diff"] = 0.0
+            # TODO: Extract real diff when Step 7 refs are generated
         elif "Step 7 (ODE Solver): ❌" in output:
             swift_results["ode_solver"]["passed"] = False
 
         if "Step 8 (Vocoder): ✅ PASSED" in output:
             swift_results["vocoder"]["passed"] = True
-            swift_results["vocoder"]["diff"] = 0.0
+            # TODO: Extract real diff when Step 8 refs are generated
         elif "Step 8 (Vocoder): ❌" in output:
             swift_results["vocoder"]["passed"] = False
 
@@ -427,7 +454,10 @@ def run_swift_verification(test_case: TestCase) -> Tuple[bool, dict]:
 def format_result(stage: StageResult) -> str:
     """Format a stage result for display."""
     status = "✅ VERIFIED" if stage.passed else "❌ FAILED"
-    diff_str = f"{stage.max_diff:.2e}" if stage.max_diff != float('inf') else "N/A"
+    if stage.max_diff is None or stage.max_diff == float('inf'):
+        diff_str = "N/A"
+    else:
+        diff_str = f"{stage.max_diff:.2e}"
     return f"Stage {stage.name} — {status} (Diff: {diff_str})\n  Notes: {stage.notes}"
 
 
@@ -503,14 +533,28 @@ def run_verification(test_case: TestCase, model, device: str, swift_only: bool =
             notes = f"emotion_adv={emotion_val:.3f}, shape {cond_shape} (Python only)"
         results.append(StageResult(name="2: T3 Conditioning", passed=passed, max_diff=diff, notes=notes))
 
-    # Stage 3: T3 Token Generation (Python only for now)
+    # Stage 3: T3 Token Generation
     if max_step >= 3 and "step3_speech_tokens" in python_refs:
         token_count = len(python_refs["step3_speech_tokens"])
+        swift_t3 = swift_results.get("t3_generation", {})
+        if run_swift and swift_t3.get("passed") is not None:
+            passed = swift_t3["passed"]
+            # Use match percentage as "difference" metric (0 = 100% match, 100 = 0% match)
+            diff = swift_t3.get("diff", float('inf'))
+            match_pct = swift_t3.get("match_percent")
+            if match_pct is not None:
+                notes = f"{token_count} tokens - Swift {match_pct:.1f}% match ({'PASS' if passed else 'FAIL'})"
+            else:
+                notes = f"{token_count} tokens - Swift {'PASS' if passed else 'FAIL'}"
+        else:
+            passed = True
+            diff = 0.0
+            notes = f"Generated {token_count} speech tokens (Python only)"
         results.append(StageResult(
             name="3: T3 Token Generation",
-            passed=True,
-            max_diff=0.0,
-            notes=f"Generated {token_count} speech tokens (Python)"
+            passed=passed,
+            max_diff=diff,
+            notes=notes
         ))
 
     # Stage 4: S3Gen Embedding (Python only for now)
@@ -623,10 +667,15 @@ def print_comprehensive_summary(all_results: List[Tuple[TestCase, List[StageResu
             total = passed_count + failed_count
 
             if stats["diffs"]:
-                max_diff = max(stats["diffs"])
-                diff_str = f"{max_diff:.2e}"
+                # Filter out None values before finding max
+                valid_diffs = [d for d in stats["diffs"] if d is not None and d != float('inf')]
+                if valid_diffs:
+                    max_diff = max(valid_diffs)
+                    diff_str = f"{max_diff:.2e}"
+                else:
+                    diff_str = "N/A"
             else:
-                diff_str = "0.0"
+                diff_str = "N/A"
 
             if failed_count == 0:
                 status = "✅ VERIFIED"
@@ -674,7 +723,7 @@ def print_comprehensive_summary(all_results: List[Tuple[TestCase, List[StageResu
         for tc, passed, results in tests:
             status = "✅" if passed else "❌"
             # Get max diff across all stages
-            diffs = [r.max_diff for r in results if r.max_diff != float('inf')]
+            diffs = [r.max_diff for r in results if r.max_diff is not None and r.max_diff != float('inf')]
             max_diff = max(diffs) if diffs else 0.0
             test_id = f"{tc.sentence_id}_{tc.language}"
             text_preview = tc.text[:30] + "..." if len(tc.text) > 30 else tc.text
