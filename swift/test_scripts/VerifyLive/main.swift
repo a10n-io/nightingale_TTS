@@ -297,7 +297,14 @@ func remapS3Keys(_ weights: [String: MLXArray]) -> [String: MLXArray] {
     var remapped: [String: MLXArray] = [:]
     for (key, value) in weights {
         if let newKey = remapS3Key(key) {
-            remapped[newKey] = value
+            // CRITICAL FIX: Transpose spkEmbedAffine weight from PyTorch [80, 192] to MLX [192, 80]
+            if newKey == "spkEmbedAffine.weight" {
+                let transposedWeight = value.T
+                print("🔧 Transposing spkEmbedAffine.weight: \(value.shape) → \(transposedWeight.shape)")
+                remapped[newKey] = transposedWeight
+            } else {
+                remapped[newKey] = value
+            }
         }
     }
     return remapped
@@ -915,9 +922,62 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
         debugShape("norm", norm)
         let spkEmbNorm = spkEmb / norm
         debugShape("spkEmbNorm", spkEmbNorm)
-        print("  About to call spkEmbedAffine..."); fflush(stdout)
-        let spkEmbProj = s3gen!.spkEmbedAffine(spkEmbNorm)
+
+        // ✅ SURGICAL REWRITE: Clean room implementation
+        print("\n🔬 === SURGICAL REWRITE: Manual Speaker Projection ==="); fflush(stdout)
+        print("  Input (spkEmbNorm): \(spkEmbNorm.shape)"); fflush(stdout)
+        print("  Verifying spkEmbedAffine dimensions..."); fflush(stdout)
+        let affineWeight = s3gen!.spkEmbedAffine.weight
+        guard let affineBias = s3gen!.spkEmbedAffine.bias else {
+            fatalError("spkEmbedAffine.bias is nil!")
+        }
+        eval(affineWeight, affineBias)  // Force evaluation to check shapes NOW
+        print("  spkEmbedAffine.weight.shape: \(affineWeight.shape)"); fflush(stdout)
+        print("  spkEmbedAffine.bias.shape: \(affineBias.shape)"); fflush(stdout)
+
+        // CRITICAL CHECK: Weight shape must be [192, 80] in MLX format
+        if affineWeight.shape[0] != 192 || affineWeight.shape[1] != 80 {
+            print("🚨🚨🚨 BUG FOUND IN WEIGHT SHAPE!"); fflush(stdout)
+            print("  Expected: [192, 80] (MLX Linear format: [in_features, out_features])"); fflush(stdout)
+            print("  Got: \(affineWeight.shape)"); fflush(stdout)
+            fatalError("spkEmbedAffine has wrong weight shape!")
+        }
+
+        // Manual forward pass with explicit shapes
+        // MLX Linear does: output = input @ weight + bias (NO transpose!)
+        print("  Doing manual matmul: spkEmbNorm @ weight + bias"); fflush(stdout)
+        print("  affineWeight.shape: \(affineWeight.shape)"); fflush(stdout)
+        eval(affineWeight)
+        let manualMatmul = matmul(spkEmbNorm, affineWeight)
+        print("  matmul result: \(manualMatmul.shape)"); fflush(stdout)
+        eval(manualMatmul)
+        let manualResult = manualMatmul + affineBias
+        print("  After bias: \(manualResult.shape)"); fflush(stdout)
+        eval(manualResult)
+
+        if manualResult.shape != [1, 80] {
+            print("🚨🚨🚨 MANUAL PROJECTION FAILED!"); fflush(stdout)
+            print("  Expected: [1, 80]"); fflush(stdout)
+            print("  Got: \(manualResult.shape)"); fflush(stdout)
+            fatalError("Manual speaker projection produced wrong shape!")
+        }
+        print("  ✅ Manual projection correct: [1, 80]"); fflush(stdout)
+
+        // WORKAROUND: Manually call Linear forward since .update() doesn't work reliably
+        print("  Workaround: Using manual Linear forward with transposed weight..."); fflush(stdout)
+        // affineWeight is already [192, 80] from our transpose
+        // af fineBias is [80]
+        let spkEmbProj = matmul(spkEmbNorm, affineWeight) + affineBias
+        print("  Manual Linear result: \(spkEmbProj.shape)"); fflush(stdout)
         debugShape("spkEmbProj_AFTER_AFFINE", spkEmbProj)
+
+        if spkEmbProj.shape != [1, 80] {
+            print("🚨🚨🚨 spkEmbedAffine() RETURNED WRONG SHAPE!"); fflush(stdout)
+            print("  Expected: [1, 80]"); fflush(stdout)
+            print("  Got: \(spkEmbProj.shape)"); fflush(stdout)
+            fatalError("spkEmbedAffine forward pass produced wrong shape!")
+        }
+        print("🔬 === END SURGICAL REWRITE ===\n"); fflush(stdout)
 
         // Evaluate each tensor individually to find which causes the broadcast error
         print("\nEvaluating tensors individually..."); fflush(stdout)
@@ -1152,7 +1212,8 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
             if spkEmbFor7a.ndim == 1 { spkEmbFor7a = spkEmbFor7a.expandedDimensions(axis: 0) }
             let norm7a = sqrt(sum(spkEmbFor7a * spkEmbFor7a, axis: 1, keepDims: true)) + 1e-8
             let spkEmbNorm7a = spkEmbFor7a / norm7a
-            let spkEmbProj7a = s3gen!.spkEmbedAffine(spkEmbNorm7a)
+            // WORKAROUND: Manual matmul since Linear.update() doesn't persist transpose
+            let spkEmbProj7a = matmul(spkEmbNorm7a, s3gen!.spkEmbedAffine.weight) + s3gen!.spkEmbedAffine.bias!
             eval(spkEmbProj7a)
 
             print("\nSwift inputs:")

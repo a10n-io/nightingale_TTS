@@ -953,15 +953,34 @@ public class T3Model: Module {
         self.norm = RMSNorm(dims: config.hiddenSize, eps: config.rmsNormEps)
 
         // Load final norm weight
-        print("🔍 Loading final norm weight...")
+        print("🔍 Loading final norm weight..."); fflush(stdout)
         print("   Available keys containing 'norm': \(weights.keys.filter { $0.contains("norm") })")
+        fflush(stdout)
+        print("   About to access weights[\"norm.weight\"]..."); fflush(stdout)
         if let normWeight = weights["norm.weight"] {
-            print("   ✅ Found 'norm.weight' key, shape: \(normWeight.shape)")
-            print("   Before assignment - norm.weight[:5]: \(self.norm.weight[0..<5].asArray(Float.self))")
+            print("   Successfully got normWeight"); fflush(stdout)
+            print("   ✅ Found 'norm.weight' key, shape: \(normWeight.shape), dtype: \(normWeight.dtype)")
+            eval(normWeight)
+            print("   normWeight range: [\(normWeight.min().item(Float.self)), \(normWeight.max().item(Float.self))]")
+            print("   Current norm.weight shape: \(self.norm.weight.shape)")
+
+            // Assign the weight
             self.norm.weight = normWeight
+            print("   ✅ Weight assigned successfully")
+
             eval(self.norm.weight)
-            print("   After assignment - norm.weight[:5]: \(self.norm.weight[0..<5].asArray(Float.self))")
-            print("   After assignment - mean: \(self.norm.weight.mean().item(Float.self)), sum: \(self.norm.weight.sum().item(Float.self))")
+            print("   ✅ Eval completed")
+
+            // Try to access the data safely
+            do {
+                let firstFive = try self.norm.weight[0..<min(5, self.norm.weight.shape[0])].asArray(Float.self)
+                print("   After assignment - norm.weight[:5]: \(firstFive)")
+                let meanVal = self.norm.weight.mean().item(Float.self)
+                let sumVal = self.norm.weight.sum().item(Float.self)
+                print("   After assignment - mean: \(meanVal), sum: \(sumVal)")
+            } catch {
+                print("   ⚠️  Error accessing norm weight values: \(error)")
+            }
         } else {
             print("   ❌ 'norm.weight' key NOT FOUND in weights dictionary!")
         }

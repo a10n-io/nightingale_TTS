@@ -1902,13 +1902,19 @@ public class S3Gen: Module {
         print("DEBUG S3Gen: spkEmbedAffine created"); fflush(stdout)
 
         // Load spk_embed_affine_layer weights
+        // CRITICAL: PyTorch stores weights as [out_features, in_features] = [80, 192]
+        // MLX expects [in_features, out_features] = [192, 80]
+        // Must transpose!
         print("DEBUG S3Gen: About to iterate flowWeights for spkEmbedAffine..."); fflush(stdout)
         for (key, value) in flowWeights {
             if key.hasPrefix("s3gen.flow.spk_embed_affine_layer.") {
                 let remappedKey = key.replacingOccurrences(of: "s3gen.flow.spk_embed_affine_layer.", with: "")
                 if remappedKey == "weight" {
-                    spkEmbedAffine.update(parameters: ModuleParameters.unflattened(["weight": value]))
-                    print("DEBUG S3Gen: Loaded spkEmbedAffine.weight")
+                    // Transpose PyTorch weight [80, 192] -> MLX format [192, 80]
+                    let transposedWeight = value.T
+                    print("DEBUG S3Gen: Transposing weight from \(value.shape) to \(transposedWeight.shape)")
+                    spkEmbedAffine.update(parameters: ModuleParameters.unflattened(["weight": transposedWeight]))
+                    print("DEBUG S3Gen: Loaded spkEmbedAffine.weight (transposed)")
                 } else if remappedKey == "bias" {
                     spkEmbedAffine.update(parameters: ModuleParameters.unflattened(["bias": value]))
                     print("DEBUG S3Gen: Loaded spkEmbedAffine.bias")
@@ -1916,8 +1922,11 @@ public class S3Gen: Module {
             } else if key.hasPrefix("flow.spk_embed_affine_layer.") {
                 let remappedKey = key.replacingOccurrences(of: "flow.spk_embed_affine_layer.", with: "")
                 if remappedKey == "weight" {
-                    spkEmbedAffine.update(parameters: ModuleParameters.unflattened(["weight": value]))
-                    print("DEBUG S3Gen: Loaded spkEmbedAffine.weight")
+                    // Transpose PyTorch weight [80, 192] -> MLX format [192, 80]
+                    let transposedWeight = value.T
+                    print("DEBUG S3Gen: Transposing weight from \(value.shape) to \(transposedWeight.shape)")
+                    spkEmbedAffine.update(parameters: ModuleParameters.unflattened(["weight": transposedWeight]))
+                    print("DEBUG S3Gen: Loaded spkEmbedAffine.weight (transposed)")
                 } else if remappedKey == "bias" {
                     spkEmbedAffine.update(parameters: ModuleParameters.unflattened(["bias": value]))
                     print("DEBUG S3Gen: Loaded spkEmbedAffine.bias")
@@ -1986,7 +1995,8 @@ public class S3Gen: Module {
         let norm = sqrt(sum(spkEmb * spkEmb, axis: 1, keepDims: true)) + 1e-8
         spkEmb = spkEmb / norm
         print("DEBUG S3Gen: Calling spkEmbedAffine..."); fflush(stdout)
-        let spkCond = spkEmbedAffine(spkEmb) // [1, 80]
+        // WORKAROUND: Manual matmul since Linear.update() doesn't persist transpose
+        let spkCond = matmul(spkEmb, spkEmbedAffine.weight) + spkEmbedAffine.bias! // [1, 80]
         eval(spkCond)
         let spkFlat = spkCond.flattened(); eval(spkFlat)
         let spkFirst10 = Array(spkFlat.asArray(Float.self).prefix(10))
@@ -2204,7 +2214,8 @@ public class S3Gen: Module {
         var spkEmb = speakerEmb
         let norm = sqrt(sum(spkEmb * spkEmb, axis: 1, keepDims: true)) + 1e-8
         spkEmb = spkEmb / norm
-        let spkCond = spkEmbedAffine(spkEmb)
+        // WORKAROUND: Manual matmul since Linear.update() doesn't persist transpose
+        let spkCond = matmul(spkEmb, spkEmbedAffine.weight) + spkEmbedAffine.bias!
 
         let promptMel = promptFeat
         let L_pm = promptMel.shape[1]
@@ -2264,7 +2275,8 @@ public class S3Gen: Module {
         var spkEmb = speakerEmb
         let norm = sqrt(sum(spkEmb * spkEmb, axis: 1, keepDims: true)) + 1e-8
         spkEmb = spkEmb / norm
-        let spkCond = spkEmbedAffine(spkEmb)
+        // WORKAROUND: Manual matmul since Linear.update() doesn't persist transpose
+        let spkCond = matmul(spkEmb, spkEmbedAffine.weight) + spkEmbedAffine.bias!
 
         // Save speaker conditioning
         traceData["spk_cond"] = spkCond
@@ -2396,7 +2408,8 @@ public class S3Gen: Module {
         var spkEmb = speakerEmb
         let norm = sqrt(sum(spkEmb * spkEmb, axis: 1, keepDims: true)) + 1e-8
         spkEmb = spkEmb / norm
-        let spkCond = spkEmbedAffine(spkEmb)
+        // WORKAROUND: Manual matmul since Linear.update() doesn't persist transpose
+        let spkCond = matmul(spkEmb, spkEmbedAffine.weight) + spkEmbedAffine.bias!
 
         let inputs = concatenated([promptToken, tokens], axis: 1)
         let vocabSize = inputEmbedding.weight.shape[0]

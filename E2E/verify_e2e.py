@@ -237,9 +237,15 @@ def run_swift_verification(test_case: TestCase) -> Tuple[bool, dict]:
         output = result.stdout + result.stderr
 
         # Parse results from Swift output
+        import re
         swift_results = {
             "tokenization": {"passed": False, "diff": None},
             "conditioning": {"passed": False, "diff": None},
+            "s3gen_input": {"passed": False, "diff": None},
+            "encoder": {"passed": False, "diff": None},
+            "decoder_forward": {"passed": False, "diff": None},
+            "ode_solver": {"passed": False, "diff": None},
+            "vocoder": {"passed": False, "diff": None},
         }
 
         # Check for step results
@@ -252,12 +258,41 @@ def run_swift_verification(test_case: TestCase) -> Tuple[bool, dict]:
         if "Step 2 (Conditioning): ✅ PASSED" in output:
             swift_results["conditioning"]["passed"] = True
             # Try to extract max_diff
-            import re
             match = re.search(r"final_cond: ([\d.e+-]+)", output)
             if match:
                 swift_results["conditioning"]["diff"] = float(match.group(1))
         elif "Step 2 (Conditioning): ❌" in output:
             swift_results["conditioning"]["passed"] = False
+
+        if "Step 5 (S3Gen Input): ✅ PASSED" in output:
+            swift_results["s3gen_input"]["passed"] = True
+            swift_results["s3gen_input"]["diff"] = 0.0
+        elif "Step 5 (S3Gen Input): ❌" in output:
+            swift_results["s3gen_input"]["passed"] = False
+
+        if "Step 6 (Encoder): ✅ PASSED" in output:
+            swift_results["encoder"]["passed"] = True
+            swift_results["encoder"]["diff"] = 0.0
+        elif "Step 6 (Encoder): ❌" in output:
+            swift_results["encoder"]["passed"] = False
+
+        if "Step 7a (Decoder Forward): ✅ PASSED" in output:
+            swift_results["decoder_forward"]["passed"] = True
+            swift_results["decoder_forward"]["diff"] = 0.0
+        elif "Step 7a (Decoder Forward): ❌" in output:
+            swift_results["decoder_forward"]["passed"] = False
+
+        if "Step 7 (ODE Solver): ✅ PASSED" in output:
+            swift_results["ode_solver"]["passed"] = True
+            swift_results["ode_solver"]["diff"] = 0.0
+        elif "Step 7 (ODE Solver): ❌" in output:
+            swift_results["ode_solver"]["passed"] = False
+
+        if "Step 8 (Vocoder): ✅ PASSED" in output:
+            swift_results["vocoder"]["passed"] = True
+            swift_results["vocoder"]["diff"] = 0.0
+        elif "Step 8 (Vocoder): ❌" in output:
+            swift_results["vocoder"]["passed"] = False
 
         # Check overall pass
         all_passed = "ALL TESTS PASSED" in output
@@ -351,6 +386,46 @@ def run_verification(test_case: TestCase, model, device: str, swift_only: bool =
             notes=f"Voice embedding shape {emb_shape} (Python)"
         ))
 
+    # Stage 5: S3Gen Input Prep
+    swift_s3_input = swift_results.get("s3gen_input", {})
+    if run_swift and swift_s3_input.get("passed") is not None:
+        passed = swift_s3_input["passed"]
+        diff = swift_s3_input.get("diff", 0.0) or 0.0
+        notes = f"Token concat, embedding, speaker projection - Swift {'MATCH' if passed else 'MISMATCH'}"
+        results.append(StageResult(name="5: S3Gen Input Prep", passed=passed, max_diff=diff, notes=notes))
+
+    # Stage 6: S3Gen Encoder
+    swift_encoder = swift_results.get("encoder", {})
+    if run_swift and swift_encoder.get("passed") is not None:
+        passed = swift_encoder["passed"]
+        diff = swift_encoder.get("diff", 0.0) or 0.0
+        notes = f"UpsampleConformer encoder - Swift {'MATCH' if passed else 'MISMATCH'}"
+        results.append(StageResult(name="6: S3Gen Encoder", passed=passed, max_diff=diff, notes=notes))
+
+    # Stage 7a: Decoder Forward Pass
+    swift_decoder = swift_results.get("decoder_forward", {})
+    if run_swift and swift_decoder.get("passed") is not None:
+        passed = swift_decoder["passed"]
+        diff = swift_decoder.get("diff", 0.0) or 0.0
+        notes = f"Single decoder forward pass - Swift {'MATCH' if passed else 'MISMATCH'}"
+        results.append(StageResult(name="7a: Decoder Forward", passed=passed, max_diff=diff, notes=notes))
+
+    # Stage 7: ODE Solver
+    swift_ode = swift_results.get("ode_solver", {})
+    if run_swift and swift_ode.get("passed") is not None:
+        passed = swift_ode["passed"]
+        diff = swift_ode.get("diff", 0.0) or 0.0
+        notes = f"Flow Matching ODE solver - Swift {'MATCH' if passed else 'MISMATCH'}"
+        results.append(StageResult(name="7: ODE Solver", passed=passed, max_diff=diff, notes=notes))
+
+    # Stage 8: Vocoder
+    swift_vocoder = swift_results.get("vocoder", {})
+    if run_swift and swift_vocoder.get("passed") is not None:
+        passed = swift_vocoder["passed"]
+        diff = swift_vocoder.get("diff", 0.0) or 0.0
+        notes = f"HiFTGenerator mel-to-audio - Swift {'MATCH' if passed else 'MISMATCH'}"
+        results.append(StageResult(name="8: Vocoder", passed=passed, max_diff=diff, notes=notes))
+
     return results
 
 
@@ -385,10 +460,11 @@ def print_comprehensive_summary(all_results: List[Tuple[TestCase, List[StageResu
         ("2: T3 Conditioning", "Speaker, emotion, perceiver & final cond", True, True),
         ("3: T3 Token Generation", "Speech tokens from T3 transformer", True, True),
         ("4: S3Gen Embedding", "Voice embedding", True, True),
-        ("5: S3Gen Input Prep", "Token concat, mask, embedding, spk projection", False, True),
-        ("6: S3Gen Encoder", "UpsampleConformer encoder", False, True),
-        ("7: ODE Solver", "Flow Matching / CFM decoder", False, True),
-        ("8: Vocoder", "HiFTGenerator mel-to-audio", False, True),
+        ("5: S3Gen Input Prep", "Token concat, mask, embedding, spk projection", True, True),
+        ("6: S3Gen Encoder", "UpsampleConformer encoder", True, True),
+        ("7a: Decoder Forward", "Single decoder pass verification", True, True),
+        ("7: ODE Solver", "Flow Matching / CFM decoder", True, True),
+        ("8: Vocoder", "HiFTGenerator mel-to-audio", True, True),
     ]
 
     # Print stage-by-stage summary
