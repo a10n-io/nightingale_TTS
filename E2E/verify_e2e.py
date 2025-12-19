@@ -201,29 +201,45 @@ def generate_python_reference(model, test_case: TestCase, device: str, max_step:
     if max_step == 1:
         return outputs
 
-    # Step 2: T3 Conditioning
+    # Step 2: T3 Conditioning (with detailed intermediate outputs)
     t3 = model.t3
     conds = model.conds.t3
 
+    # 2.1: Speaker token generation
     speaker_emb = conds.speaker_emb.to(device)
+    outputs["step2_speaker_emb_input"] = speaker_emb.detach().cpu().numpy()
     speaker_token = t3.cond_enc.spkr_enc(speaker_emb).unsqueeze(1)
-
-    cond_speech_tokens = conds.cond_prompt_speech_tokens.to(device)
-    speech_emb = t3.speech_emb(cond_speech_tokens)
-    positions = torch.arange(cond_speech_tokens.shape[1], device=device).unsqueeze(0)
-    speech_pos_emb = t3.speech_pos_emb(positions)
-    cond_speech_emb = speech_emb + speech_pos_emb
-    perceiver_out = t3.cond_enc.perceiver(cond_speech_emb)
-
-    emotion_value = conds.emotion_adv.to(device)
-    emotion_token = t3.cond_enc.emotion_adv_fc(emotion_value)
-
-    final_cond = torch.cat([speaker_token, perceiver_out, emotion_token], dim=1)
-
     outputs["step2_speaker_token"] = speaker_token.detach().cpu().numpy()
+
+    # 2.2: Speech embeddings + positional embeddings
+    cond_speech_tokens = conds.cond_prompt_speech_tokens.to(device)
+    outputs["step2_cond_speech_tokens"] = cond_speech_tokens.detach().cpu().numpy().astype(np.int32)
+
+    speech_emb = t3.speech_emb(cond_speech_tokens)
+    outputs["step2_speech_emb"] = speech_emb.detach().cpu().numpy()
+
+    positions = torch.arange(cond_speech_tokens.shape[1], device=device).unsqueeze(0)
+    outputs["step2_positions"] = positions.detach().cpu().numpy().astype(np.int32)
+
+    speech_pos_emb = t3.speech_pos_emb(positions)
+    outputs["step2_speech_pos_emb"] = speech_pos_emb.detach().cpu().numpy()
+
+    cond_speech_emb = speech_emb + speech_pos_emb
+    outputs["step2_cond_speech_emb"] = cond_speech_emb.detach().cpu().numpy()
+
+    # 2.3: Perceiver processing
+    perceiver_out = t3.cond_enc.perceiver(cond_speech_emb)
     outputs["step2_perceiver_out"] = perceiver_out.detach().cpu().numpy()
-    outputs["step2_emotion_token"] = emotion_token.detach().cpu().numpy()
+
+    # 2.4: Emotion processing
+    emotion_value = conds.emotion_adv.to(device)
     outputs["step2_emotion_value"] = emotion_value.detach().cpu().numpy()
+
+    emotion_token = t3.cond_enc.emotion_adv_fc(emotion_value)
+    outputs["step2_emotion_token"] = emotion_token.detach().cpu().numpy()
+
+    # 2.5: Final concatenation
+    final_cond = torch.cat([speaker_token, perceiver_out, emotion_token], dim=1)
     outputs["step2_final_cond"] = final_cond.detach().cpu().numpy()
 
     # Step 3: T3 Generation

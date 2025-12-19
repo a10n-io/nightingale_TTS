@@ -849,77 +849,137 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
     print("\n✅ Step 1 PASSED - proceeding with Swift's tokens for pipeline")
 
     // =========================================================================
-    // STEP 2: T3 CONDITIONING
+    // STEP 2: T3 CONDITIONING (Forensic Verification)
     // =========================================================================
     print("\n" + String(repeating: "=", count: 80))
-    print("STEP 2: T3 CONDITIONING")
+    print("STEP 2: T3 CONDITIONING (Forensic Verification)")
     print(String(repeating: "=", count: 80))
 
-    // Run conditioning
-    let spkToken = t3.speakerProj(soul_t3).expandedDimensions(axis: 1)
-    let condLen = t3_cond_tokens.shape[1]
-    let condPositions = MLXArray(0..<condLen).asType(.int32).expandedDimensions(axis: 0)
-
-    let speechEmb = t3.speechEmb(t3_cond_tokens)
-    let speechPosEmb = t3.speechPosEmb(condPositions)
-    let condSpeechEmb = speechEmb + speechPosEmb
-    let perceiverOut = t3.perceiver!(condSpeechEmb)
-
-    // emotionValue is loaded from NPY file above (not hardcoded 0.5)
-    let emotionInput = MLXArray([emotionValue]).reshaped([1, 1, 1])
-    let emotionToken = t3.emotionAdvFC!(emotionInput)
-
-    let finalCond = concatenated([spkToken, perceiverOut, emotionToken], axis: 1)
-
-    print("speaker_token: \(spkToken.shape)")
-    print("perceiver_out: \(perceiverOut.shape)")
-    print("emotion_token: \(emotionToken.shape)")
-    print("final_cond: \(finalCond.shape)")
-
-    // Debug: Print actual values
-    eval(spkToken, perceiverOut, emotionToken)
-    let spkVals = spkToken.reshaped([-1]).asArray(Float.self)
-    let percVals = perceiverOut.reshaped([-1]).asArray(Float.self)
-    let emoVals = emotionToken.reshaped([-1]).asArray(Float.self)
-    print("\nSwift values (first 5):")
-    print("  speaker_token: \(spkVals.prefix(5).map { String(format: "%.6f", $0) }.joined(separator: ", "))")
-    print("  perceiver_out: \(percVals.prefix(5).map { String(format: "%.6f", $0) }.joined(separator: ", "))")
-    print("  emotion_token: \(emoVals.prefix(5).map { String(format: "%.6f", $0) }.joined(separator: ", "))")
-
-    // Also print input values to verify
-    let soulVals = soul_t3.reshaped([-1]).asArray(Float.self)
-    let condTokenVals = t3_cond_tokens.reshaped([-1]).asArray(Int32.self)
-    print("\nInput values:")
-    print("  soul_t3[:5]: \(soulVals.prefix(5).map { String(format: "%.6f", $0) }.joined(separator: ", "))")
-    print("  t3_cond_tokens[:10]: \(condTokenVals.prefix(10))")
-
-    // Check if Step 2 reference files exist before trying to load them
+    // Check if Step 2 reference files exist
     let step2RefPath = verifyURL.appendingPathComponent("step2_speaker_token.npy")
     let hasStep2References = FileManager.default.fileExists(atPath: step2RefPath.path)
     var step2Pass = false  // Default to false, will be set to true if verification passes
-    let threshold: Float = 0.001  // Define threshold here for use in summary
+    let step2Threshold: Float = 1e-6  // Stricter threshold for forensic verification
 
     if hasStep2References {
-        // Load Python reference
+        print("\n2.1: SPEAKER TOKEN GENERATION")
+        print(String(repeating: "-", count: 40))
+
+        // Verify input: speaker embedding
+        if let refSpeakerEmb = try? NPYLoader.load(contentsOf: verifyURL.appendingPathComponent("step2_speaker_emb_input.npy")) {
+            let speakerEmbDiff = maxDiff(soul_t3, refSpeakerEmb)
+            print("  Input soul_t3 vs Python speaker_emb: \(String(format: "%.2e", speakerEmbDiff))")
+            if speakerEmbDiff > 0 {
+                print("  ⚠️  WARNING: Input speaker embeddings differ!")
+            }
+        }
+
+        // Generate and verify speaker token
+        let spkToken = t3.speakerProj(soul_t3).expandedDimensions(axis: 1)
+        eval(spkToken)
         let refSpeaker = try NPYLoader.load(contentsOf: verifyURL.appendingPathComponent("step2_speaker_token.npy"))
-        let refPerceiver = try NPYLoader.load(contentsOf: verifyURL.appendingPathComponent("step2_perceiver_out.npy"))
-        let refEmotion = try NPYLoader.load(contentsOf: verifyURL.appendingPathComponent("step2_emotion_token.npy"))
-        let refFinal = try NPYLoader.load(contentsOf: verifyURL.appendingPathComponent("step2_final_cond.npy"))
-
-        // Compare
         let speakerDiff = maxDiff(spkToken, refSpeaker)
+        print("  speaker_token shape: \(spkToken.shape)")
+        print("  speaker_token max_diff: \(String(format: "%.2e", speakerDiff))")
+        print("  speaker_token match: \(speakerDiff == 0 ? "✅ EXACT" : speakerDiff < 1e-6 ? "⚠️  CLOSE" : "❌ MISMATCH")")
+
+        print("\n2.2: SPEECH EMBEDDINGS + POSITIONAL EMBEDDINGS")
+        print(String(repeating: "-", count: 40))
+
+        // Verify conditioning tokens
+        if let refCondTokens = try? NPYLoader.load(contentsOf: verifyURL.appendingPathComponent("step2_cond_speech_tokens.npy")) {
+            let condTokensDiff = maxDiff(t3_cond_tokens.asType(.int32), refCondTokens.asType(.int32))
+            print("  cond_speech_tokens match: \(condTokensDiff == 0 ? "✅ EXACT" : "❌ MISMATCH")")
+        }
+
+        // Speech embeddings
+        let speechEmb = t3.speechEmb(t3_cond_tokens)
+        eval(speechEmb)
+        if let refSpeechEmb = try? NPYLoader.load(contentsOf: verifyURL.appendingPathComponent("step2_speech_emb.npy")) {
+            let speechEmbDiff = maxDiff(speechEmb, refSpeechEmb)
+            print("  speech_emb shape: \(speechEmb.shape)")
+            print("  speech_emb max_diff: \(String(format: "%.2e", speechEmbDiff))")
+            print("  speech_emb match: \(speechEmbDiff == 0 ? "✅ EXACT" : speechEmbDiff < 1e-6 ? "⚠️  CLOSE" : "❌ MISMATCH")")
+        }
+
+        // Positional embeddings
+        let condLen = t3_cond_tokens.shape[1]
+        let condPositions = MLXArray(0..<condLen).asType(.int32).expandedDimensions(axis: 0)
+
+        if let refPositions = try? NPYLoader.load(contentsOf: verifyURL.appendingPathComponent("step2_positions.npy")) {
+            let posDiff = maxDiff(condPositions, refPositions.asType(.int32))
+            print("  positions match: \(posDiff == 0 ? "✅ EXACT" : "❌ MISMATCH")")
+        }
+
+        let speechPosEmb = t3.speechPosEmb(condPositions)
+        eval(speechPosEmb)
+        if let refSpeechPosEmb = try? NPYLoader.load(contentsOf: verifyURL.appendingPathComponent("step2_speech_pos_emb.npy")) {
+            let speechPosEmbDiff = maxDiff(speechPosEmb, refSpeechPosEmb)
+            print("  speech_pos_emb max_diff: \(String(format: "%.2e", speechPosEmbDiff))")
+            print("  speech_pos_emb match: \(speechPosEmbDiff == 0 ? "✅ EXACT" : speechPosEmbDiff < 1e-6 ? "⚠️  CLOSE" : "❌ MISMATCH")")
+        }
+
+        // Combined speech embedding
+        let condSpeechEmb = speechEmb + speechPosEmb
+        eval(condSpeechEmb)
+        if let refCondSpeechEmb = try? NPYLoader.load(contentsOf: verifyURL.appendingPathComponent("step2_cond_speech_emb.npy")) {
+            let condSpeechEmbDiff = maxDiff(condSpeechEmb, refCondSpeechEmb)
+            print("  cond_speech_emb (speech + pos) max_diff: \(String(format: "%.2e", condSpeechEmbDiff))")
+            print("  cond_speech_emb match: \(condSpeechEmbDiff == 0 ? "✅ EXACT" : condSpeechEmbDiff < 1e-6 ? "⚠️  CLOSE" : "❌ MISMATCH")")
+        }
+
+        print("\n2.3: PERCEIVER PROCESSING")
+        print(String(repeating: "-", count: 40))
+
+        let perceiverOut = t3.perceiver!(condSpeechEmb)
+        eval(perceiverOut)
+        let refPerceiver = try NPYLoader.load(contentsOf: verifyURL.appendingPathComponent("step2_perceiver_out.npy"))
         let perceiverDiff = maxDiff(perceiverOut, refPerceiver)
+        print("  perceiver_out shape: \(perceiverOut.shape)")
+        print("  perceiver_out max_diff: \(String(format: "%.2e", perceiverDiff))")
+        print("  perceiver_out match: \(perceiverDiff == 0 ? "✅ EXACT" : perceiverDiff < 1e-6 ? "⚠️  CLOSE" : "❌ MISMATCH")")
+
+        print("\n2.4: EMOTION PROCESSING")
+        print(String(repeating: "-", count: 40))
+
+        // Verify emotion value input
+        let emotionInput = MLXArray([emotionValue]).reshaped([1, 1, 1])
+        if let refEmotionValue = try? NPYLoader.load(contentsOf: verifyURL.appendingPathComponent("step2_emotion_value.npy")) {
+            let emotionValueDiff = maxDiff(emotionInput, refEmotionValue)
+            print("  emotion_value: \(emotionValue)")
+            print("  emotion_value match: \(emotionValueDiff == 0 ? "✅ EXACT" : "❌ MISMATCH")")
+        }
+
+        let emotionToken = t3.emotionAdvFC!(emotionInput)
+        eval(emotionToken)
+        let refEmotion = try NPYLoader.load(contentsOf: verifyURL.appendingPathComponent("step2_emotion_token.npy"))
         let emotionDiff = maxDiff(emotionToken, refEmotion)
+        print("  emotion_token shape: \(emotionToken.shape)")
+        print("  emotion_token max_diff: \(String(format: "%.2e", emotionDiff))")
+        print("  emotion_token match: \(emotionDiff == 0 ? "✅ EXACT" : emotionDiff < 1e-6 ? "⚠️  CLOSE" : "❌ MISMATCH")")
+
+        print("\n2.5: FINAL CONCATENATION")
+        print(String(repeating: "-", count: 40))
+
+        let finalCond = concatenated([spkToken, perceiverOut, emotionToken], axis: 1)
+        eval(finalCond)
+        let refFinal = try NPYLoader.load(contentsOf: verifyURL.appendingPathComponent("step2_final_cond.npy"))
         let finalDiff = maxDiff(finalCond, refFinal)
+        print("  final_cond shape: \(finalCond.shape)")
+        print("  final_cond max_diff: \(String(format: "%.2e", finalDiff))")
+        print("  final_cond match: \(finalDiff == 0 ? "✅ EXACT" : finalDiff < 1e-6 ? "⚠️  CLOSE" : "❌ MISMATCH")")
 
-        print("\nComparison (max_diff):")
-        print("  speaker_token: \(String(format: "%.2e", speakerDiff))")
-        print("  perceiver_out: \(String(format: "%.2e", perceiverDiff))")
-        print("  emotion_token: \(String(format: "%.2e", emotionDiff))")
-        print("  final_cond: \(String(format: "%.2e", finalDiff))")
+        print("\n" + String(repeating: "=", count: 80))
 
-        step2Pass = speakerDiff < threshold && perceiverDiff < threshold &&
-                        emotionDiff < threshold && finalDiff < threshold
+        // Overall pass/fail (require exact match or very close)
+        step2Pass = speakerDiff < step2Threshold && perceiverDiff < step2Threshold &&
+                    emotionDiff < step2Threshold && finalDiff < step2Threshold
+
+        if step2Pass {
+            print("Step 2 (T3 Conditioning): ✅ PASSED (all diffs < \(String(format: "%.1e", step2Threshold)))")
+        } else {
+            print("Step 2 (T3 Conditioning): ❌ FAILED (some diffs >= \(String(format: "%.1e", step2Threshold)))")
+        }
     } else {
         print("\n[Step 2: T3 Conditioning verification SKIPPED (no references found)]")
     }
@@ -1644,7 +1704,7 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
 
     print("Step 1 (Tokenization): \(step1Pass ? "✅ PASSED" : "❌ FAILED")")
     if hasStep2References {
-        print("Step 2 (Conditioning): \(step2Pass ? "✅ PASSED (max_diff < \(threshold))" : "❌ FAILED")")
+        print("Step 2 (Conditioning): \(step2Pass ? "✅ PASSED (max_diff < \(String(format: "%.1e", step2Threshold)))" : "❌ FAILED")")
     } else {
         print("Step 2 (Conditioning): ⏭️  SKIPPED (no reference files)")
     }

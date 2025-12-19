@@ -87,7 +87,8 @@ public class PerceiverAttention: Module {
 
         // Scaled dot-product attention
         // scores: [B, numHeads, T1, T2]
-        let scores = (q * scale).matmul(k.transposed(0, 1, 3, 2))
+        // CRITICAL: Match Python order - matmul THEN scale (not scale THEN matmul)
+        let scores = q.matmul(k.transposed(0, 1, 3, 2)) * scale
         let attnWeights = softmax(scores, axis: -1)
 
         // Apply attention to values
