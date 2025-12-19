@@ -1865,12 +1865,14 @@ public class T3Model: Module {
                         print("   Token 1514: cond=\(String(format: "%+.6f", token1514_cond)), uncond=\(String(format: "%+.6f", token1514_uncond)), gap=\(String(format: "%+.6f", token1514_cond - token1514_uncond))")
                         print("   Token 3704: cond=\(String(format: "%+.6f", token3704_cond)), uncond=\(String(format: "%+.6f", token3704_uncond)), gap=\(String(format: "%+.6f", token3704_cond - token3704_uncond))")
                         print("   CFG weight: \(cfgWeight)")
-                        print("   Formula: uncond + cfg * (cond - uncond)\n")
+                        print("   Formula: cond + cfg * (cond - uncond)\n")
                     }
 
-                    // CFG formula: uncond + cfg * (cond - uncond)
-                    // Python: logits_cfg = uncond_logits + cfg_weight * (cond_logits - uncond_logits)
-                    logits = uncondLogits + MLXArray(cfgWeight) * (condLogits - uncondLogits)
+                    // CFG formula: cond + cfg * (cond - uncond)
+                    // Python t3.py line 358: logits = cond + cfg * (cond - uncond)
+                    // This AMPLIFIES the conditioned logits: (1+cfg)*cond - cfg*uncond
+                    // For cfg=0.5: 1.5*cond - 0.5*uncond
+                    logits = condLogits + MLXArray(cfgWeight) * (condLogits - uncondLogits)
                 } else {
                     logits = allLogits[0, 0..., 0...]  // [1, vocab]
                 }
