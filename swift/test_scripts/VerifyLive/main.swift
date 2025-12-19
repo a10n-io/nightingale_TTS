@@ -236,6 +236,59 @@ func maxDiff(_ a: MLXArray, _ b: MLXArray) -> Float {
     return abs(a - b).max().item(Float.self)
 }
 
+/// Normalize punctuation for TTS input
+/// Matches Python's punc_norm() function in mtl_tts.py
+/// - Capitalizes first letter
+/// - Normalizes whitespace (removes multiple spaces)
+/// - Replaces uncommon punctuation (smart quotes, em-dashes, ellipsis, etc.)
+/// - Adds period if no ending punctuation
+func puncNorm(_ text: String) -> String {
+    var result = text
+
+    // Handle empty text
+    if result.isEmpty {
+        return "You need to add some text for me to talk."
+    }
+
+    // Capitalize first letter
+    if let first = result.first, first.isLowercase {
+        result = first.uppercased() + String(result.dropFirst())
+    }
+
+    // Remove multiple space chars (normalize whitespace)
+    result = result.components(separatedBy: .whitespaces)
+        .filter { !$0.isEmpty }
+        .joined(separator: " ")
+
+    // Replace uncommon/LLM punctuation
+    let replacements: [(String, String)] = [
+        ("...", ", "),
+        ("…", ", "),
+        (":", ","),
+        (" - ", ", "),
+        (";", ", "),
+        ("—", "-"),
+        ("–", "-"),
+        (" ,", ","),
+        ("\u{201C}", "\""),  // Left double curly quote "
+        ("\u{201D}", "\""),  // Right double curly quote "
+        ("\u{2018}", "'"),   // Left single curly quote '
+        ("\u{2019}", "'"),   // Right single curly quote '
+    ]
+    for (old, new) in replacements {
+        result = result.replacingOccurrences(of: old, with: new)
+    }
+
+    // Add full stop if no ending punctuation
+    result = result.trimmingCharacters(in: .whitespaces)
+    let sentenceEnders: Set<Character> = [".", "!", "?", "-", ",", "、", "，", "。", "？", "！"]
+    if let lastChar = result.last, !sentenceEnders.contains(lastChar) {
+        result += "."
+    }
+
+    return result
+}
+
 func loadConfig(from url: URL? = nil) throws -> (text: String, voice: String, language: String) {
     let configURL = url ?? URL(fileURLWithPath: "\(DEFAULT_VERIFY_PATH)/config.json")
     let data = try Data(contentsOf: configURL)
@@ -703,24 +756,31 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
     print()
 
     // =========================================================================
-    // STEP 1: TEXT TOKENIZATION
+    // STEP 1: TEXT TOKENIZATION (with punc_norm)
     // =========================================================================
     print(String(repeating: "=", count: 80))
     print("STEP 1: TEXT TOKENIZATION")
     print(String(repeating: "=", count: 80))
 
-    // VERIFICATION 1: Input text (no punc_norm in Swift - config text already normalized)
-    print("\nPre-tokenization verification:")
-    if let pyTextOrig = pythonTextOriginal {
-        print("  Python original text: \"\(pyTextOrig)\"")
-        print("  Swift text (from config): \"\(text)\"")
-        print("  Match: \(text == pyTextOrig ? "✅" : "❌")")
-    }
+    // Use original text if available, otherwise use text from config
+    let originalText = pythonTextOriginal ?? text
 
-    // VERIFICATION 2: Text after punc_norm (Python applies it, Swift doesn't need to)
+    // Apply Swift's puncNorm (matches Python's punc_norm)
+    let normalizedText = puncNorm(originalText)
+
+    // VERIFICATION 1: Input text
+    print("\nPre-tokenization verification:")
+    print("  Original text: \"\(originalText)\"")
+    print("  After puncNorm: \"\(normalizedText)\"")
+
+    // VERIFICATION 2: puncNorm output matches Python
     if let pyTextAfter = pythonTextAfterPuncNorm {
+        let puncNormMatch = normalizedText == pyTextAfter
         print("  Python after punc_norm: \"\(pyTextAfter)\"")
-        print("  Text unchanged (already normalized): \(text == pyTextAfter ? "✅" : "❌")")
+        print("  puncNorm match: \(puncNormMatch ? "✅" : "❌")")
+        if !puncNormMatch {
+            print("  ⚠️  Swift puncNorm differs from Python punc_norm!")
+        }
     }
 
     // VERIFICATION 3: Language ID
@@ -730,11 +790,11 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
         print("  Language ID match: \(languageId == pyLangId ? "✅" : "❌")")
     }
 
-    // Perform tokenization
+    // Perform tokenization on normalized text
     print("\nTokenizing...")
-    print("Text to tokenize: \"\(text)\"")
+    print("Text to tokenize: \"\(normalizedText)\"")
     print("Language ID: \(languageId)")
-    let swiftTokens = tokenize(text, vocab: vocab, merges: merges, languageId: languageId)
+    let swiftTokens = tokenize(normalizedText, vocab: vocab, merges: merges, languageId: languageId)
     print("Swift tokens: \(swiftTokens)")
 
     // VERIFICATION 4: Token count

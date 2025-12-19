@@ -650,9 +650,11 @@ public actor ChatterboxEngine {
             throw ChatterboxError.modelNotLoaded
         }
 
-        print("Generating speech for: \"\(text)\"")
+        // Apply punctuation normalization (matches Python's punc_norm)
+        let normalizedText = puncNorm(text)
+        print("Generating speech for: \"\(normalizedText)\"")
 
-        let tokens = tokenize(text)
+        let tokens = tokenize(normalizedText)
         let textTokens = MLXArray(tokens.map { Int32($0) }).expandedDimensions(axis: 0)
 
         print("Text tokens: \(tokens.count)")
@@ -733,6 +735,59 @@ public actor ChatterboxEngine {
         }
         print("Loaded BPE vocab with \(vocabDict.count) tokens and \(merges.count) merge rules")
         return (vocabDict, merges)
+    }
+
+    /// Normalize punctuation for TTS input
+    /// Matches Python's punc_norm() function in mtl_tts.py
+    /// - Capitalizes first letter
+    /// - Normalizes whitespace (removes multiple spaces)
+    /// - Replaces uncommon punctuation (smart quotes, em-dashes, ellipsis, etc.)
+    /// - Adds period if no ending punctuation
+    public func puncNorm(_ text: String) -> String {
+        var result = text
+
+        // Handle empty text
+        if result.isEmpty {
+            return "You need to add some text for me to talk."
+        }
+
+        // Capitalize first letter
+        if let first = result.first, first.isLowercase {
+            result = first.uppercased() + String(result.dropFirst())
+        }
+
+        // Remove multiple space chars (normalize whitespace)
+        result = result.components(separatedBy: .whitespaces)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+
+        // Replace uncommon/LLM punctuation
+        let replacements: [(String, String)] = [
+            ("...", ", "),
+            ("…", ", "),
+            (":", ","),
+            (" - ", ", "),
+            (";", ", "),
+            ("—", "-"),
+            ("–", "-"),
+            (" ,", ","),
+            ("\u{201C}", "\""),  // Left double curly quote "
+            ("\u{201D}", "\""),  // Right double curly quote "
+            ("\u{2018}", "'"),   // Left single curly quote '
+            ("\u{2019}", "'"),   // Right single curly quote '
+        ]
+        for (old, new) in replacements {
+            result = result.replacingOccurrences(of: old, with: new)
+        }
+
+        // Add full stop if no ending punctuation
+        result = result.trimmingCharacters(in: .whitespaces)
+        let sentenceEnders: Set<Character> = [".", "!", "?", "-", ",", "、", "，", "。", "？", "！"]
+        if let lastChar = result.last, !sentenceEnders.contains(lastChar) {
+            result += "."
+        }
+
+        return result
     }
 
     public func tokenize(_ text: String) -> [Int] {
@@ -845,8 +900,12 @@ public actor ChatterboxEngine {
         }
         print("DEBUG: Guards passed"); fflush(stdout)
 
+        // Apply punctuation normalization (matches Python's punc_norm)
+        let normalizedText = puncNorm(text)
+        print("DEBUG: Text after puncNorm: \"\(normalizedText)\""); fflush(stdout)
+
         print("DEBUG: Tokenizing text..."); fflush(stdout)
-        let tokens = tokenize(text)
+        let tokens = tokenize(normalizedText)
         print("DEBUG: Got \(tokens.count) tokens"); fflush(stdout)
         print("DEBUG: Token values: \(tokens.prefix(20))... (showing first 20)"); fflush(stdout)
         print("DEBUG: Python would produce 42 tokens: [255, 284, 18, 84, ...]"); fflush(stdout)
