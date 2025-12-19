@@ -11,10 +11,13 @@ Usage (from project root):
     python E2E/verify_e2e.py
     python E2E/verify_e2e.py --voice samantha
     python E2E/verify_e2e.py --swift-only  # Skip Python, just run Swift against existing refs
+    python E2E/verify_e2e.py --steps 1     # Test only Step 1 (tokenization)
+    python E2E/verify_e2e.py --steps 1 --linguistic  # Test Step 1 with 22 languages (132 test cases)
 
 Or directly (uses venv python):
     ./E2E/verify_e2e.py
     ./E2E/verify_e2e.py --swift-only
+    ./E2E/verify_e2e.py --steps 1 --linguistic
 """
 
 import torch
@@ -69,38 +72,83 @@ def set_deterministic_seeds(seed: int = SEED):
     torch.backends.cudnn.benchmark = False
 
 
-def load_test_sentences() -> list:
-    """Load test sentences from JSON."""
-    with open(E2E_DIR / "test_sentences.json", "r") as f:
+def load_test_sentences(linguistic: bool = False) -> list:
+    """Load test sentences from JSON.
+
+    Args:
+        linguistic: If True, load from test_sentences_unicode_linguistic.json
+                   instead of test_sentences.json
+    """
+    filename = "test_sentences_unicode_linguistic.json" if linguistic else "test_sentences.json"
+    with open(E2E_DIR / filename, "r") as f:
         return json.load(f)
 
 
 def get_test_cases(voice_filter: Optional[str] = None,
                    sentence_filter: Optional[str] = None,
-                   lang_filter: Optional[str] = None) -> List[TestCase]:
-    """Generate test cases."""
+                   lang_filter: Optional[str] = None,
+                   linguistic: bool = False) -> List[TestCase]:
+    """Generate test cases.
+
+    Args:
+        voice_filter: Filter to specific voice name
+        sentence_filter: Filter to specific sentence ID
+        lang_filter: Filter to specific language code
+        linguistic: If True, use linguistic Unicode test file with extended language support
+    """
     voices = ["samantha", "sujano"]
-    sentences = load_test_sentences()
-    languages = ["en", "nl"]
+    sentences = load_test_sentences(linguistic=linguistic)
 
     test_cases = []
-    for voice in voices:
-        if voice_filter and voice != voice_filter:
-            continue
-        for sentence in sentences:
-            if sentence_filter and sentence["id"] != sentence_filter:
+
+    if linguistic:
+        # Linguistic test structure: each entry has text_XX_1, text_XX_2, text_XX_3
+        # where XX is the language code (extracted from id)
+        for voice in voices:
+            if voice_filter and voice != voice_filter:
                 continue
-            for lang in languages:
+            for sentence in sentences:
+                # Extract language from id (e.g., "ar_complex" -> "ar")
+                lang = sentence["id"].split("_")[0]
                 if lang_filter and lang != lang_filter:
                     continue
-                text_key = f"text_{lang}"
-                if text_key in sentence:
-                    test_cases.append(TestCase(
-                        voice=voice,
-                        sentence_id=sentence["id"],
-                        text=sentence[text_key],
-                        language=lang
-                    ))
+
+                # Each sentence has 3 variants (_1, _2, _3)
+                for variant in [1, 2, 3]:
+                    text_key = f"text_{lang}_{variant}"
+                    sentence_id = f"{sentence['id']}_{variant}"
+
+                    if sentence_filter and sentence_id != sentence_filter:
+                        continue
+
+                    if text_key in sentence:
+                        test_cases.append(TestCase(
+                            voice=voice,
+                            sentence_id=sentence_id,
+                            text=sentence[text_key],
+                            language=lang
+                        ))
+    else:
+        # Regular test structure: text_en, text_nl, etc.
+        languages = ["en", "nl"]
+        for voice in voices:
+            if voice_filter and voice != voice_filter:
+                continue
+            for sentence in sentences:
+                if sentence_filter and sentence["id"] != sentence_filter:
+                    continue
+                for lang in languages:
+                    if lang_filter and lang != lang_filter:
+                        continue
+                    text_key = f"text_{lang}"
+                    if text_key in sentence:
+                        test_cases.append(TestCase(
+                            voice=voice,
+                            sentence_id=sentence["id"],
+                            text=sentence[text_key],
+                            language=lang
+                        ))
+
     return test_cases
 
 
@@ -592,8 +640,9 @@ def print_comprehensive_summary(all_results: List[Tuple[TestCase, List[StageResu
     print()
 
     # Print test matrix
+    total_test_count = len(all_results)
     print("┌" + "─" * 78 + "┐")
-    print("│" + " TEST MATRIX (20 Test Cases)".center(78) + "│")
+    print("│" + f" TEST MATRIX ({total_test_count} Test Cases)".center(78) + "│")
     print("├" + "─" * 78 + "┤")
 
     # Group by voice
@@ -648,6 +697,7 @@ def main():
     parser.add_argument("--swift-only", action="store_true", help="Skip Python generation")
     parser.add_argument("--no-swift", action="store_true", help="Skip Swift verification")
     parser.add_argument("--steps", type=int, default=5, help="Max step to generate/verify (1-5). Default: 5")
+    parser.add_argument("--linguistic", action="store_true", help="Use Unicode linguistic test file (22 languages, complex Unicode)")
     args = parser.parse_args()
 
     run_swift = not args.no_swift
@@ -659,6 +709,7 @@ def main():
     print(f"Seed: {SEED}")
     print(f"Temperature: {TEMPERATURE}")
     print(f"Max step: {args.steps}")
+    print(f"Test set: {'Linguistic Unicode (22 languages)' if args.linguistic else 'Standard (en, nl)'}")
     print(f"Swift verification: {'enabled' if run_swift else 'disabled'}")
     print()
 
@@ -690,7 +741,7 @@ def main():
         print()
 
     # Get test cases
-    test_cases = get_test_cases(args.voice, args.sentence, args.lang)
+    test_cases = get_test_cases(args.voice, args.sentence, args.lang, linguistic=args.linguistic)
     print(f"Running {len(test_cases)} test cases...")
     print()
 

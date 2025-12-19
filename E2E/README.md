@@ -37,6 +37,17 @@ python/venv/bin/python E2E/verify_e2e.py
 # Or run directly (scripts have correct shebang)
 ./E2E/verify_e2e.py
 
+# Test only Step 1 (tokenization) - fastest verification
+./E2E/verify_e2e.py --steps 1
+
+# Test with linguistic Unicode tests (22 languages, 132 test cases)
+./E2E/verify_e2e.py --steps 1 --linguistic
+
+# Test specific language from linguistic set
+./E2E/verify_e2e.py --steps 1 --linguistic --lang ar   # Arabic
+./E2E/verify_e2e.py --steps 1 --linguistic --lang ja   # Japanese
+./E2E/verify_e2e.py --steps 1 --linguistic --lang ru   # Russian
+
 # Use existing Python references, only run Swift comparison
 ./E2E/verify_e2e.py --swift-only
 
@@ -61,8 +72,10 @@ Unified verification script that:
 **Arguments:**
 - `--voice`, `-v`: Filter to specific voice (samantha, sujano)
 - `--sentence`, `-s`: Filter to specific sentence ID
-- `--lang`, `-l`: Filter to specific language (en, nl)
+- `--lang`, `-l`: Filter to specific language (en, nl for standard tests; ar, zh, da, nl, en, fi, fr, de, el, he, hi, it, ja, ko, ms, no, pl, pt, ru, es, sv, sw, tr for linguistic tests)
 - `--device`, `-d`: PyTorch device (cpu, mps, cuda)
+- `--steps`: Max step to generate/verify (1-8). Default: 5. Use `--steps 1` for fast tokenization-only testing
+- `--linguistic`: Use Unicode linguistic test file (22 languages, 132 test cases) instead of standard tests (2 languages, 20 test cases)
 - `--swift-only`: Skip Python generation, use existing references
 - `--no-swift`: Skip Swift verification, only generate Python refs
 
@@ -112,7 +125,7 @@ python/venv/bin/python E2E/run_python_e2e.py
 
 ## Test Data
 
-### test_sentences.json
+### test_sentences.json (Standard Test Set)
 
 Contains 5 test sentences in English and Dutch:
 
@@ -123,6 +136,51 @@ Contains 5 test sentences in English and Dutch:
 | narrative_flow | Length / Pacing | Long-form generation |
 | interrogative | Intonation / Question | Question intonation |
 | technical_status | Technical / Articulation | Technical vocabulary |
+
+**Test matrix:** 2 voices × 5 sentences × 2 languages = **20 test cases**
+
+### test_sentences_unicode_linguistic.json (Linguistic Unicode Test Set)
+
+Contains 22 languages with complex Unicode features specifically designed to test NFKD normalization and Unicode scalar handling. Each language has 3 text variants with increasing complexity.
+
+**Languages tested:**
+- **Arabic (ar)**: Ligatures & Harakat (vowel diacritics)
+- **Chinese (zh)**: CJK Unified Ideographs & full-width punctuation
+- **Danish (da)**: Special vowels (Å, Ø, Æ)
+- **Dutch (nl)**: Digraphs (ij) & trema (ë)
+- **English (en)**: Ligatures & typographic punctuation
+- **Finnish (fi)**: Double vowels & umlauts (Ä, Ö)
+- **French (fr)**: Ligatures (œ) & cedilla (ç)
+- **German (de)**: Eszett (ß) vs SS & umlauts
+- **Greek (el)**: Final sigma (ς) vs medial (σ) & tones
+- **Hebrew (he)**: Nikkud (vowel points)
+- **Hindi (hi)**: Conjuncts & virama (complex rendering)
+- **Italian (it)**: Accented finals (à, è, ì, ò, ù)
+- **Japanese (ja)**: Kanji, hiragana, katakana & full-width
+- **Korean (ko)**: Hangul Jamo composition
+- **Malay (ms)**: Loan words & standard Latin
+- **Norwegian (no)**: Vowels (Å, Ø, Æ)
+- **Polish (pl)**: Ogonek (ą, ę) & slash (ł)
+- **Portuguese (pt)**: Tilde (ã, õ) & cedilla (ç)
+- **Russian (ru)**: Cyrillic yo (ё) & hard/soft signs
+- **Spanish (es)**: Inverted marks (¿, ¡) & enye (ñ)
+- **Swedish (sv)**: Vowels (Å, Ä, Ö)
+- **Swahili (sw)**: Agglutinative morphology
+- **Turkish (tr)**: Dotted/dotless I (ı, İ) & cedilla
+
+**Test matrix:** 2 voices × 22 languages × 3 variants = **132 test cases**
+
+**Usage:**
+```bash
+# Run all linguistic tests
+./E2E/verify_e2e.py --steps 1 --linguistic
+
+# Test specific language
+./E2E/verify_e2e.py --steps 1 --linguistic --lang ar   # 6 test cases (2 voices × 3 variants)
+./E2E/verify_e2e.py --steps 1 --linguistic --lang ja   # 6 test cases
+```
+
+**Note:** The linguistic test set is designed for Step 1 (tokenization) verification and tests critical Unicode edge cases including NFKD normalization, combining marks, and grapheme cluster handling.
 
 ### Voices
 
@@ -136,11 +194,12 @@ Both voices must have `emotion_adv.npy` exported (not hardcoded 0.5).
 
 ```
 E2E/
-├── README.md                 # This file
-├── verify_e2e.py            # Main verification script
-├── run_python_e2e.py        # Python reference generator
-├── test_sentences.json      # Test sentences (en/nl)
-└── reference_outputs/       # Generated Python references
+├── README.md                              # This file
+├── verify_e2e.py                          # Main verification script
+├── run_python_e2e.py                      # Python reference generator
+├── test_sentences.json                    # Standard test sentences (en/nl, 20 tests)
+├── test_sentences_unicode_linguistic.json # Linguistic Unicode tests (22 languages, 132 tests)
+└── reference_outputs/                     # Generated Python references
     ├── samantha/
     │   ├── basic_greeting_en/
     │   │   ├── config.json
@@ -367,6 +426,8 @@ let skipS3Gen = false  // Change from true to false
 
 ## Adding New Test Cases
 
+### Standard Test Set
+
 1. Add sentence to `test_sentences.json`:
 ```json
 {
@@ -381,6 +442,26 @@ let skipS3Gen = false  // Change from true to false
 ```bash
 ./E2E/verify_e2e.py --sentence new_test
 ```
+
+### Linguistic Unicode Test Set
+
+1. Add language entry to `test_sentences_unicode_linguistic.json`:
+```json
+{
+  "id": "vi_complex",
+  "description": "Vietnamese: Tone Marks & Combined Diacritics",
+  "text_vi_1": "Xin chào thế giới.",
+  "text_vi_2": "Tiếng Việt có sáu thanh điệu khác nhau.",
+  "text_vi_3": "Tôi đang học tiếng Việt ở trường đại học."
+}
+```
+
+2. Regenerate references:
+```bash
+./E2E/verify_e2e.py --steps 1 --linguistic --lang vi
+```
+
+**Note:** Each language entry should have 3 text variants (`text_XX_1`, `text_XX_2`, `text_XX_3`) where XX is the 2-letter language code. The ID format should be `{lang}_complex`.
 
 ## Adding New Voices
 
