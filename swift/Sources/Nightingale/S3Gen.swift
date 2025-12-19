@@ -375,7 +375,7 @@ public class S3ConformerFeedForward: Module {
 
 public class ConformerBlock: Module {
     let normMHA: LayerNorm
-    let attention: RelPositionMultiHeadAttention
+    public let attention: RelPositionMultiHeadAttention  // Made public for debugging
     let normFF: LayerNorm
     let feedForward: S3ConformerFeedForward
     
@@ -484,35 +484,74 @@ public class UpsampleEncoder: Module {
     public let afterNorm: LayerNorm
 
     public init(inputDim: Int = 512, outputDim: Int = 512, weights: [String: MLXArray]? = nil) {
+        print("🔧 UpsampleEncoder.init START: inputDim=\(inputDim), outputDim=\(outputDim)"); fflush(stdout)
+
+        print("🔧  [1/10] Creating embedLinear(\(inputDim), \(outputDim))..."); fflush(stdout)
         self.embedLinear = Linear(inputDim, outputDim)
+        print("🔧  [1/10] ✓ embedLinear created"); fflush(stdout)
+
+        print("🔧  [2/10] Creating embedNorm(dim=\(outputDim))..."); fflush(stdout)
         self.embedNorm = LayerNorm(dimensions: outputDim, eps: 1e-5)
+        print("🔧  [2/10] ✓ embedNorm created"); fflush(stdout)
+
+        print("🔧  [3/10] Creating posEnc(dModel=\(outputDim))..."); fflush(stdout)
         self.posEnc = EspnetRelPositionalEncoding(dModel: outputDim)
+        print("🔧  [3/10] ✓ posEnc created"); fflush(stdout)
 
         // FIX: Use PreLookaheadLayer with weight loading instead of random weights
+        print("🔧  [4/10] Creating preLookaheadLayer..."); fflush(stdout)
         if let w = weights {
             // Use snake_case to match HuggingFace weight keys
             self.preLookaheadLayer = PreLookaheadLayer(dim: outputDim, weights: w, prefix: "encoder.pre_lookahead_layer")
         } else {
             self.preLookaheadLayer = PreLookahead(channels: outputDim)
         }
-        
+        print("🔧  [4/10] ✓ preLookaheadLayer created"); fflush(stdout)
+
+        print("🔧  [5/10] Creating 6 ConformerBlock encoders(embedDim=\(outputDim))..."); fflush(stdout)
         var encs: [ConformerBlock] = []
-        for _ in 0..<6 { encs.append(ConformerBlock(embedDim: outputDim)) }
+        for i in 0..<6 {
+            print("🔧   - Creating encoder[\(i)]..."); fflush(stdout)
+            encs.append(ConformerBlock(embedDim: outputDim))
+            print("🔧   - encoder[\(i)] created"); fflush(stdout)
+        }
         self.encoders = encs
+        print("🔧  [5/10] ✓ All encoders created"); fflush(stdout)
         
         // Correctly use Upsample1D matching Python (Repeat + Conv)
+        print("🔧  [6/10] Creating upLayer(channels=\(outputDim), stride=2)..."); fflush(stdout)
         self.upLayer = Upsample1D(channels: outputDim, outChannels: outputDim, stride: 2)
-        
+        print("🔧  [6/10] ✓ upLayer created"); fflush(stdout)
+
+        print("🔧  [7/10] Creating upEmbedLinear(\(outputDim), \(outputDim))..."); fflush(stdout)
         self.upEmbedLinear = Linear(outputDim, outputDim)
+        print("🔧  [7/10] ✓ upEmbedLinear created"); fflush(stdout)
+
+        print("🔧  [8/10] Creating upEmbedNorm(dim=\(outputDim))..."); fflush(stdout)
         self.upEmbedNorm = LayerNorm(dimensions: outputDim, eps: 1e-5)
+        print("🔧  [8/10] ✓ upEmbedNorm created"); fflush(stdout)
+
+        print("🔧  [9/10] Creating upPosEnc(dModel=\(outputDim))..."); fflush(stdout)
         self.upPosEnc = EspnetRelPositionalEncoding(dModel: outputDim)
-        
+        print("🔧  [9/10] ✓ upPosEnc created"); fflush(stdout)
+
+        print("🔧  [10/10] Creating 4 ConformerBlock upEncoders(embedDim=\(outputDim))..."); fflush(stdout)
         var upEncs: [ConformerBlock] = []
-        for _ in 0..<4 { upEncs.append(ConformerBlock(embedDim: outputDim)) }
+        for i in 0..<4 {
+            print("🔧    - Creating upEncoder[\(i)]..."); fflush(stdout)
+            upEncs.append(ConformerBlock(embedDim: outputDim))
+            print("🔧    - upEncoder[\(i)] created"); fflush(stdout)
+        }
         self.upEncoders = upEncs
-        
+        print("🔧  [10/10] ✓ All upEncoders created"); fflush(stdout)
+
+        print("🔧  Creating afterNorm..."); fflush(stdout)
         self.afterNorm = LayerNorm(dimensions: outputDim)
+        print("🔧  ✓ afterNorm created"); fflush(stdout)
+
+        print("🔧  Calling super.init()..."); fflush(stdout)
         super.init()
+        print("🔧 UpsampleEncoder.init COMPLETE"); fflush(stdout)
     }
 
     public func callAsFunction(_ x: MLXArray, seqLen: MLXArray? = nil) -> MLXArray {
@@ -853,7 +892,7 @@ public class UpsampleEncoder: Module {
         }
         if let pe = weights["\(prefix).up_embed.pos_enc.pe"] {
             upPosEnc.pe = pe
-            print("  ✅ Loaded up_embed.pos_enc.pe")
+            print("  ✅ Loaded up_embed.pos_enc.pe shape=\(pe.shape)")
         }
 
         // 8. Load up encoder blocks (0-3)
@@ -1008,11 +1047,11 @@ public class UNetBlock: Module {
     public let downLayer: CausalConv1d?
     public let upLayer: CausalConv1d?
     
-    public init(inChannels: Int, outChannels: Int, timeEmbDim: Int, numTransformers: Int, isDown: Bool = false, isUp: Bool = false) {
+    public init(inChannels: Int, outChannels: Int, timeEmbDim: Int, numTransformers: Int, numHeads: Int = 4, headDim: Int = 64, isDown: Bool = false, isUp: Bool = false) {
         self.resnet = CausalResNetBlock(dim: inChannels, dimOut: outChannels, timeEmbDim: timeEmbDim)
         var tfmrs: [FlowTransformerBlock] = []
         for _ in 0..<numTransformers {
-            tfmrs.append(FlowTransformerBlock(dim: outChannels, numHeads: 8, headDim: 64))
+            tfmrs.append(FlowTransformerBlock(dim: outChannels, numHeads: numHeads, headDim: headDim))
         }
         self.transformers = tfmrs
         
@@ -1058,15 +1097,15 @@ public class FlowMatchingDecoder: Module {
 
         // downBlocks[0] takes the raw 320-channel concatenated input
         self.downBlocks = [
-            UNetBlock(inChannels: inChannels, outChannels: hiddenDim, timeEmbDim: timeEmbDim, numTransformers: 4, isDown: true)
+            UNetBlock(inChannels: inChannels, outChannels: hiddenDim, timeEmbDim: timeEmbDim, numTransformers: 4, numHeads: config.numHeads, headDim: config.headDim, isDown: true)
         ]
         var mids: [UNetBlock] = []
         for _ in 0..<config.numMidBlocks {
-            mids.append(UNetBlock(inChannels: hiddenDim, outChannels: hiddenDim, timeEmbDim: timeEmbDim, numTransformers: 4))
+            mids.append(UNetBlock(inChannels: hiddenDim, outChannels: hiddenDim, timeEmbDim: timeEmbDim, numTransformers: 4, numHeads: config.numHeads, headDim: config.headDim))
         }
         self.midBlocks = mids
         self.upBlocks = [
-            UNetBlock(inChannels: hiddenDim * 2, outChannels: hiddenDim, timeEmbDim: timeEmbDim, numTransformers: 4, isUp: true)
+            UNetBlock(inChannels: hiddenDim * 2, outChannels: hiddenDim, timeEmbDim: timeEmbDim, numTransformers: 4, numHeads: config.numHeads, headDim: config.headDim, isUp: true)
         ]
         self.finalBlock = CausalBlock1D(dim: hiddenDim, dimOut: hiddenDim)
         self.finalProj = Conv1d(inputChannels: hiddenDim, outputChannels: 80, kernelSize: 1)
@@ -1811,39 +1850,59 @@ public class S3Gen: Module {
             }
         }
 
-        print("DEBUG S3Gen: Creating UpsampleEncoder with \(encoderWeights.count) weights")
+        print("DEBUG S3Gen: Creating UpsampleEncoder with \(encoderWeights.count) weights"); fflush(stdout)
+        // Check what position encoding keys exist
+        let posEncKeys = encoderWeights.keys.filter { $0.contains("pos_enc.pe") }
+        for key in posEncKeys {
+            if let pe = encoderWeights[key] {
+                print("DEBUG S3Gen: Found position encoding '\(key)' with shape \(pe.shape)"); fflush(stdout)
+            }
+        }
         // Create UpsampleEncoder with weights for PreLookaheadLayer
         self.encoder = UpsampleEncoder(inputDim: config.inputDim, outputDim: config.inputDim, weights: encoderWeights)
+        print("DEBUG S3Gen: UpsampleEncoder created, about to call .load()"); fflush(stdout)
         // Load all other weights using the load() method
         self.encoder.load(weights: encoderWeights, prefix: "encoder")
+        print("DEBUG S3Gen: encoder.load() completed"); fflush(stdout)
 
+        print("DEBUG S3Gen: Creating encoderProj Linear(\(config.inputDim), \(config.melChannels))..."); fflush(stdout)
         self.encoderProj = Linear(config.inputDim, config.melChannels)
+        print("DEBUG S3Gen: encoderProj created"); fflush(stdout)
         // Load encoderProj weights
+        print("DEBUG S3Gen: About to iterate flowWeights for encoderProj..."); fflush(stdout)
         for (key, value) in flowWeights {
             if key.hasPrefix("s3gen.flow.encoder_proj.") {
                 let remappedKey = key.replacingOccurrences(of: "s3gen.flow.encoder_proj.", with: "")
                 if remappedKey == "weight" {
+                    print("DEBUG S3Gen: Updating encoderProj weight..."); fflush(stdout)
                     encoderProj.update(parameters: ModuleParameters.unflattened(["weight": value]))
-                    print("DEBUG S3Gen: Loaded encoderProj.weight")
+                    print("DEBUG S3Gen: Loaded encoderProj.weight"); fflush(stdout)
                 } else if remappedKey == "bias" {
+                    print("DEBUG S3Gen: Updating encoderProj bias..."); fflush(stdout)
                     encoderProj.update(parameters: ModuleParameters.unflattened(["bias": value]))
-                    print("DEBUG S3Gen: Loaded encoderProj.bias")
+                    print("DEBUG S3Gen: Loaded encoderProj.bias"); fflush(stdout)
                 }
             } else if key.hasPrefix("flow.encoder_proj.") {
                 let remappedKey = key.replacingOccurrences(of: "flow.encoder_proj.", with: "")
                 if remappedKey == "weight" {
+                    print("DEBUG S3Gen: Updating encoderProj weight (flow prefix)..."); fflush(stdout)
                     encoderProj.update(parameters: ModuleParameters.unflattened(["weight": value]))
-                    print("DEBUG S3Gen: Loaded encoderProj.weight")
+                    print("DEBUG S3Gen: Loaded encoderProj.weight"); fflush(stdout)
                 } else if remappedKey == "bias" {
+                    print("DEBUG S3Gen: Updating encoderProj bias (flow prefix)..."); fflush(stdout)
                     encoderProj.update(parameters: ModuleParameters.unflattened(["bias": value]))
-                    print("DEBUG S3Gen: Loaded encoderProj.bias")
+                    print("DEBUG S3Gen: Loaded encoderProj.bias"); fflush(stdout)
                 }
             }
         }
+        print("DEBUG S3Gen: encoderProj weights loaded"); fflush(stdout)
 
+        print("DEBUG S3Gen: Creating spkEmbedAffine Linear(192, \(config.melChannels))..."); fflush(stdout)
         self.spkEmbedAffine = Linear(192, config.melChannels)
+        print("DEBUG S3Gen: spkEmbedAffine created"); fflush(stdout)
 
         // Load spk_embed_affine_layer weights
+        print("DEBUG S3Gen: About to iterate flowWeights for spkEmbedAffine..."); fflush(stdout)
         for (key, value) in flowWeights {
             if key.hasPrefix("s3gen.flow.spk_embed_affine_layer.") {
                 let remappedKey = key.replacingOccurrences(of: "s3gen.flow.spk_embed_affine_layer.", with: "")
@@ -1865,13 +1924,22 @@ public class S3Gen: Module {
                 }
             }
         }
+        print("DEBUG S3Gen: spkEmbedAffine weights loaded"); fflush(stdout)
 
+        print("DEBUG S3Gen: Creating FlowMatchingDecoder..."); fflush(stdout)
         self.decoder = FlowMatchingDecoder(config: config)
+        print("DEBUG S3Gen: FlowMatchingDecoder created"); fflush(stdout)
+        print("DEBUG S3Gen: Creating Mel2Wav vocoder..."); fflush(stdout)
         self.vocoder = Mel2Wav()
+        print("DEBUG S3Gen: Mel2Wav vocoder created"); fflush(stdout)
         // Generate fixed noise once at init (matching Python's CausalConditionalCFM)
+        print("DEBUG S3Gen: Generating fixed noise..."); fflush(stdout)
         MLXRandom.seed(0)
         self.fixedNoise = MLXRandom.normal([1, 80, 50 * 300])
+        print("DEBUG S3Gen: Fixed noise generated"); fflush(stdout)
+        print("DEBUG S3Gen: Calling super.init()..."); fflush(stdout)
         super.init()
+        print("DEBUG S3Gen: S3Gen.init COMPLETE"); fflush(stdout)
     }
 
     // Legacy support - DEPRECATED: Use init(flowWeights:vocoderWeights:) instead

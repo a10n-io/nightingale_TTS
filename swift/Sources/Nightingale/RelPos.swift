@@ -17,6 +17,13 @@ public class EspnetRelPositionalEncoding: Module {
     public var pe: MLXArray
     
     public init(dModel: Int, dropoutRate: Float = 0.1) {
+        // 🚨 RED HANDED CHECK
+        if dModel == 80 {
+            print("🚨🚨🚨 CAUGHT RED HANDED: EspnetRelPositionalEncoding initialized with dModel=80!")
+            print("🚨 Stack trace will show the caller")
+            fatalError("EspnetRelPositionalEncoding: dModel cannot be 80 (mel_channels)! Should be 512 or 256.")
+        }
+
         self.dModel = dModel
         self.dropoutRate = dropoutRate
         self.xscale = sqrt(Float(dModel))
@@ -114,6 +121,30 @@ public class RelPositionMultiHeadAttention: Module {
         self.dHead = dModel / numHeads
         self.scale = 1.0 / sqrt(Float(dHead))
 
+        // 🔍 DEBUG: Print ALL RelPositionMultiHeadAttention initializations
+        print("🔍 RelPosAttn.init: dModel=\(dModel), numHeads=\(numHeads), dHead=\(dHead)")
+        fflush(stdout)
+
+        // 🚨 RED HANDED CHECK
+        if dHead == 80 {
+            print("🚨🚨🚨 CAUGHT RED HANDED: RelPositionMultiHeadAttention initialized with dHead=80!")
+            print("   dModel=\(dModel), numHeads=\(numHeads), dHead=\(dHead)")
+            print("   This will cause broadcast errors!")
+            fflush(stdout)
+            fatalError("RelPositionMultiHeadAttention: dHead cannot be 80 (mel_channels)!")
+        }
+        if dModel == 80 {
+            print("🚨 WARNING: RelPositionMultiHeadAttention initialized with dModel=80 (mel_channels)!")
+            print("   dModel=\(dModel), numHeads=\(numHeads), computed dHead=\(dHead)")
+            fflush(stdout)
+        }
+        if dModel == 640 {
+            print("🚨 SUSPICIOUS: RelPositionMultiHeadAttention initialized with dModel=640 (8*80)!")
+            print("   This means dHead=\(dHead) which is 80 (melChannels), NOT 64!")
+            fflush(stdout)
+            fatalError("RelPositionMultiHeadAttention: dModel=640 is wrong! Should be 512.")
+        }
+
         self.queryProj = Linear(dModel, dModel)
         self.keyProj = Linear(dModel, dModel)
         self.valueProj = Linear(dModel, dModel)
@@ -151,21 +182,58 @@ public class RelPositionMultiHeadAttention: Module {
         let B = x.shape[0]
         let T = x.shape[1]
 
+        print("🔍 RelPosAttn ENTRY: x.shape=\(x.shape), posEmb.shape=\(posEmb.shape)"); fflush(stdout)
+        print("🔍 RelPosAttn CONFIG: dModel=\(dModel), numHeads=\(numHeads), dHead=\(dHead)"); fflush(stdout)
+
         let q = queryProj(x).reshaped([B, T, numHeads, dHead]).transposed(0, 2, 1, 3) // [B, H, T, D_h]
+        print("🔍 RelPosAttn: q.shape=\(q.shape)"); fflush(stdout)
         let k = keyProj(x).reshaped([B, T, numHeads, dHead]).transposed(0, 2, 1, 3)
+        print("🔍 RelPosAttn: k.shape=\(k.shape)"); fflush(stdout)
         let v = valueProj(x).reshaped([B, T, numHeads, dHead]).transposed(0, 2, 1, 3)
+        print("🔍 RelPosAttn: v.shape=\(v.shape)"); fflush(stdout)
 
         // Pos embeddings
         let nBatchPos = posEmb.shape[0]
-        let p = linearPos(posEmb).reshaped([nBatchPos, -1, numHeads, dHead]).transposed(0, 2, 1, 3)
+        let posSeqLen = posEmb.shape[1]
+        print("🔍 RelPosAttn: About to call linearPos(posEmb)..."); fflush(stdout)
+        print("🔍   posEmb.shape=\(posEmb.shape)"); fflush(stdout)
+        print("🔍   linearPos.weight.shape=\(linearPos.weight.shape)"); fflush(stdout)
+        eval(linearPos.weight)  // Force evaluation to check weight shape
+        let pProj = linearPos(posEmb)  // [nBatchPos, posSeqLen, dModel]
+        print("🔍 RelPosAttn: pProj.shape=\(pProj.shape)"); fflush(stdout)
+        print("🔍   Expected: [\(nBatchPos), \(posSeqLen), \(dModel)]"); fflush(stdout)
+        if pProj.shape[2] != dModel {
+            print("🚨🚨🚨 FOUND THE BUG: linearPos output dimension is \(pProj.shape[2]), expected \(dModel)!"); fflush(stdout)
+            fatalError("linearPos projection is WRONG!")
+        }
+
+        // Ensure pProj has the right shape before reshaping
+        // pProj should be [nBatchPos, posSeqLen, dModel] where dModel = numHeads * dHead
+        let expectedDim = numHeads * dHead
+        if pProj.shape[2] != expectedDim {
+            fatalError("RelPos: linearPos output dim mismatch! Got \(pProj.shape[2]), expected \(expectedDim) (numHeads=\(numHeads) * dHead=\(dHead))")
+        }
+
+        print("🔍 RelPosAttn: About to reshape pProj to [B, T, H, D_h]..."); fflush(stdout)
+        let p = pProj.reshaped([nBatchPos, posSeqLen, numHeads, dHead]).transposed(0, 2, 1, 3)
+        print("🔍 RelPosAttn: p.shape=\(p.shape)"); fflush(stdout)
 
         // Add biases
+        print("🔍 RelPosAttn: posBiasU.shape=\(posBiasU.shape), posBiasV.shape=\(posBiasV.shape)"); fflush(stdout)
+        print("🔍 RelPosAttn: About to add posBiasU to q..."); fflush(stdout)
         let qWithBiasU = q + posBiasU.reshaped([1, numHeads, 1, dHead])
+        print("🔍 RelPosAttn: qWithBiasU.shape=\(qWithBiasU.shape)"); fflush(stdout)
+        print("🔍 RelPosAttn: About to add posBiasV to q..."); fflush(stdout)
         let qWithBiasV = q + posBiasV.reshaped([1, numHeads, 1, dHead])
+        print("🔍 RelPosAttn: qWithBiasV.shape=\(qWithBiasV.shape)"); fflush(stdout)
 
         // Attention Scores
+        print("🔍 RelPosAttn: Computing matrixAC = matmul(qWithBiasU, k.T)..."); fflush(stdout)
         let matrixAC = matmul(qWithBiasU, k.transposed(0, 1, 3, 2)) // [B, H, T, T]
+        print("🔍 RelPosAttn: matrixAC.shape=\(matrixAC.shape)"); fflush(stdout)
+        print("🔍 RelPosAttn: Computing matrixBD = matmul(qWithBiasV, p.T)..."); fflush(stdout)
         let matrixBD = matmul(qWithBiasV, p.transposed(0, 1, 3, 2)) // [B, H, T, 2T-1]
+        print("🔍 RelPosAttn: matrixBD.shape=\(matrixBD.shape)"); fflush(stdout)
 
         // RelShift matrixBD
         let matrixBDBshifted = relShift(matrixBD) // [B, H, T, T]
@@ -216,14 +284,56 @@ public class RelPositionMultiHeadAttention: Module {
 
         // Load positional projection (no bias)
         if let w = weights["\(prefix).linear_pos.weight"] {
+            eval(w)
+            let expectedShape = [dModel, dModel]
+
+            // 🚨 CRITICAL: Guard against shape mismatches BEFORE update
+            // MLX Linear.update() silently accepts wrong shapes and resizes the layer!
+            if w.shape[0] != expectedShape[0] || w.shape[1] != expectedShape[1] {
+                print("🚨🚨🚨 CAUGHT THE BUG!")
+                print("   Trying to load weight with shape \(w.shape) into linearPos")
+                print("   Expected: [\(dModel), \(dModel)] = [512, 512]")
+                print("   Got: \(w.shape)")
+                print("   Key: \(prefix).linear_pos.weight")
+                print("   This would silently resize Linear(512,512) → Linear(\(w.shape[0]),\(w.shape[1]))!")
+                print("   Result: posEmb [1,564,512] @ weight[\(w.shape[0]),\(w.shape[1])] = pProj [1,564,\(w.shape[1])]")
+                print("   Then pProj[1,564,\(w.shape[1])] tries to reshape to [1,564,\(numHeads),\(dHead)] → CRASH!")
+                print("   dModel=\(dModel), numHeads=\(numHeads), dHead=\(dHead)")
+                fflush(stdout)
+                fatalError("❌ STOP! linear_pos.weight has WRONG SHAPE - check weight key mapping!")
+            }
+
             linearPos.update(parameters: ModuleParameters.unflattened(["weight": w]))
+            print("✅ Loaded \(prefix).linear_pos.weight: \(w.shape)")
+            fflush(stdout)
+        } else {
+            print("⚠️  \(prefix).linear_pos.weight not found in weights dict")
+            fflush(stdout)
         }
 
         // Load positional biases
         if let u = weights["\(prefix).pos_bias_u"] {
+            eval(u)
+            let expectedShape = [numHeads, dHead]
+            if u.shape.count != 2 || u.shape[0] != expectedShape[0] || u.shape[1] != expectedShape[1] {
+                print("⚠️  ERROR: pos_bias_u shape mismatch!")
+                print("   Prefix: \(prefix)")
+                print("   Expected: \(expectedShape), Got: \(u.shape)")
+                print("   dModel=\(dModel), numHeads=\(numHeads), dHead=\(dHead)")
+                fatalError("pos_bias_u has wrong shape - expected [\(numHeads), \(dHead)], got \(u.shape)")
+            }
             posBiasU = u
         }
         if let v = weights["\(prefix).pos_bias_v"] {
+            eval(v)
+            let expectedShape = [numHeads, dHead]
+            if v.shape.count != 2 || v.shape[0] != expectedShape[0] || v.shape[1] != expectedShape[1] {
+                print("⚠️  ERROR: pos_bias_v shape mismatch!")
+                print("   Prefix: \(prefix)")
+                print("   Expected: \(expectedShape), Got: \(v.shape)")
+                print("   dModel=\(dModel), numHeads=\(numHeads), dHead=\(dHead)")
+                fatalError("pos_bias_v has wrong shape - expected [\(numHeads), \(dHead)], got \(v.shape)")
+            }
             posBiasV = v
         }
     }

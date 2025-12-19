@@ -48,6 +48,10 @@ Package.resolved
 
 .build/
 
+# Metal compiled shaders (build artifacts)
+*.metallib
+default.metallib
+
 # CocoaPods
 #
 # We recommend against adding the Pods directory to your .gitignore. However

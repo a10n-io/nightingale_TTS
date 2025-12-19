@@ -18,13 +18,15 @@ public struct NPYLoader {
     /// Load an NPY file and return an MLXArray
     public static func load(contentsOf url: URL) throws -> MLXArray {
         let data = try Data(contentsOf: url)
-        return try load(data: data)
+        let result = try load(data: data)
+        return result
     }
 
     /// Load NPY data and return an MLXArray
     public static func load(data: Data) throws -> MLXArray {
         // Parse header
         let header = try parseHeader(data: data)
+
         let headerSize = 10 + header.headerLen // magic(6) + version(2) + headerLen(2) + header
 
         // Get raw data
