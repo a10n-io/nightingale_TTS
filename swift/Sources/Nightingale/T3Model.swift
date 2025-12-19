@@ -2003,28 +2003,18 @@ public class T3Model: Module {
                     eval(logitsFlat)
                 }
 
-                // Create mask for invalid tokens (>= 6561 but NOT the EOS token 6562)
-                // S3Gen only supports tokens 0-6560, but we also need to allow EOS (6562)
-                // Invalid tokens for S3Gen: 6561, 6563, 6564, ... (but NOT 6560 = start, NOT 6562 = stop)
-                var logitsArray = logitsFlat.asArray(Float.self)
-                let vocabSize = logitsArray.count
-
-                // Mask invalid tokens (>= 6561 except EOS which is 6562)
-                for i in 6561..<vocabSize {
-                    if i != stopSpeechToken {  // Don't mask EOS
-                        logitsArray[i] = -Float.infinity
-                    }
-                }
-                let validLogits = MLXArray(logitsArray)
+                // IMPORTANT: Python does NOT mask invalid tokens during generation
+                // Invalid tokens are filtered AFTER generation via drop_invalid_tokens()
+                // This allows the model to naturally generate SOS/EOS tokens
 
                 // Handle temperature=0.0 (greedy/argmax) specially to avoid division by zero
                 let nextToken: Int
                 if temperature <= 0.0001 {  // Close to zero - use argmax
-                    let tokenIdx = Int(argMax(validLogits, axis: -1).item(Int32.self))
+                    let tokenIdx = Int(argMax(logitsFlat, axis: -1).item(Int32.self))
                     nextToken = tokenIdx
                 } else {
                     // Apply temperature scaling
-                    let scaledLogits = validLogits / MLXArray(temperature)
+                    let scaledLogits = logitsFlat / MLXArray(temperature)
                     eval(scaledLogits)
 
                 // ============================================
@@ -2212,6 +2202,35 @@ public class T3Model: Module {
         }
 
         return generatedTokens
+    }
+
+    /// Drop invalid tokens (SOS/EOS) from generated speech tokens
+    /// Matches Python's drop_invalid_tokens function:
+    /// - Removes SOS (6561) from start if present
+    /// - Removes EOS (6562) from end if present
+    /// - Returns trimmed token sequence
+    public static func dropInvalidTokens(_ tokens: [Int]) -> [Int] {
+        guard !tokens.isEmpty else { return tokens }
+
+        let SOS = 6561
+        let EOS = 6562
+
+        var startIdx = 0
+        var endIdx = tokens.count
+
+        // Find SOS and skip past it
+        if let sosIndex = tokens.firstIndex(of: SOS) {
+            startIdx = sosIndex + 1
+        }
+
+        // Find EOS and trim there
+        if let eosIndex = tokens.firstIndex(of: EOS) {
+            endIdx = eosIndex
+        }
+
+        // Return trimmed array
+        guard startIdx < endIdx else { return [] }
+        return Array(tokens[startIdx..<endIdx])
     }
 
     /// Create causal mask

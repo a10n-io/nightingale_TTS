@@ -677,9 +677,9 @@ public actor ChatterboxEngine {
         let elapsed = CFAbsoluteTimeGetCurrent() - startTime
         print("Generated \(speechTokens.count) speech tokens in \(String(format: "%.2f", elapsed))s")
 
-        // Filter out invalid tokens (>= 6561) - same as Python's drop_invalid_tokens
-        let validTokens = speechTokens.filter { $0 < 6561 }
-        print("Filtered to \(validTokens.count) valid tokens")
+        // Drop invalid tokens (SOS/EOS) - matches Python's drop_invalid_tokens
+        let validTokens = T3Model.dropInvalidTokens(speechTokens)
+        print("After dropping SOS/EOS: \(validTokens.count) tokens")
 
         print("Clearing GPU memory before S3Gen...")
         GPU.clearCache()
@@ -894,10 +894,9 @@ public actor ChatterboxEngine {
             print("🔍 Token range: min=\(minToken), max=\(maxToken)"); fflush(stdout)
         }
 
-        // Filter out invalid tokens (>= 6561) - same as Python's drop_invalid_tokens
-        // S3Gen embedding vocab is 6561, tokens >= 6561 are special tokens
-        let validTokens = speechTokens.filter { $0 < 6561 }
-        print("DEBUG: Filtered to \(validTokens.count) valid tokens (removed \(speechTokens.count - validTokens.count) invalid)"); fflush(stdout)
+        // Drop invalid tokens (SOS/EOS) - matches Python's drop_invalid_tokens
+        let validTokens = T3Model.dropInvalidTokens(speechTokens)
+        print("DEBUG: After dropping SOS/EOS: \(validTokens.count) tokens (removed \(speechTokens.count - validTokens.count))"); fflush(stdout)
 
         GPU.clearCache()
         print("DEBUG: GPU cache cleared"); fflush(stdout)
