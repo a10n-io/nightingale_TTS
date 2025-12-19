@@ -34,34 +34,62 @@ public class PerceiverAttention: Module {
 
         super.init()
 
-        // Load weights using update(parameters:)
+        // Helper to convert weights to FP32 for maximum precision
+        func ensureFP32(_ array: MLXArray, name: String) -> MLXArray {
+            if array.dtype == .float32 {
+                return array
+            } else {
+                print("  ⚠️ Converting \(name) from \(array.dtype) to FP32")
+                return array.asType(.float32)
+            }
+        }
+
+        // Load weights using update(parameters:) with explicit FP32 conversion
+        print("PerceiverAttention: Loading weights with FP32 precision...")
+
         if let w = weights["\(prefix).norm.weight"], let b = weights["\(prefix).norm.bias"] {
-            norm.update(parameters: ModuleParameters.unflattened(["weight": w, "bias": b]))
+            let wFP32 = ensureFP32(w, name: "\(prefix).norm.weight")
+            let bFP32 = ensureFP32(b, name: "\(prefix).norm.bias")
+            norm.update(parameters: ModuleParameters.unflattened(["weight": wFP32, "bias": bFP32]))
         }
 
         if let w = weights["\(prefix).to_q.weight"] {
-            var params: [String: MLXArray] = ["weight": w]
-            if let b = weights["\(prefix).to_q.bias"] { params["bias"] = b }
+            let wFP32 = ensureFP32(w, name: "\(prefix).to_q.weight")
+            var params: [String: MLXArray] = ["weight": wFP32]
+            if let b = weights["\(prefix).to_q.bias"] {
+                params["bias"] = ensureFP32(b, name: "\(prefix).to_q.bias")
+            }
             toQ.update(parameters: ModuleParameters.unflattened(params))
         }
 
         if let w = weights["\(prefix).to_k.weight"] {
-            var params: [String: MLXArray] = ["weight": w]
-            if let b = weights["\(prefix).to_k.bias"] { params["bias"] = b }
+            let wFP32 = ensureFP32(w, name: "\(prefix).to_k.weight")
+            var params: [String: MLXArray] = ["weight": wFP32]
+            if let b = weights["\(prefix).to_k.bias"] {
+                params["bias"] = ensureFP32(b, name: "\(prefix).to_k.bias")
+            }
             toK.update(parameters: ModuleParameters.unflattened(params))
         }
 
         if let w = weights["\(prefix).to_v.weight"] {
-            var params: [String: MLXArray] = ["weight": w]
-            if let b = weights["\(prefix).to_v.bias"] { params["bias"] = b }
+            let wFP32 = ensureFP32(w, name: "\(prefix).to_v.weight")
+            var params: [String: MLXArray] = ["weight": wFP32]
+            if let b = weights["\(prefix).to_v.bias"] {
+                params["bias"] = ensureFP32(b, name: "\(prefix).to_v.bias")
+            }
             toV.update(parameters: ModuleParameters.unflattened(params))
         }
 
         if let w = weights["\(prefix).proj_out.weight"] {
-            var params: [String: MLXArray] = ["weight": w]
-            if let b = weights["\(prefix).proj_out.bias"] { params["bias"] = b }
+            let wFP32 = ensureFP32(w, name: "\(prefix).proj_out.weight")
+            var params: [String: MLXArray] = ["weight": wFP32]
+            if let b = weights["\(prefix).proj_out.bias"] {
+                params["bias"] = ensureFP32(b, name: "\(prefix).proj_out.bias")
+            }
             projOut.update(parameters: ModuleParameters.unflattened(params))
         }
+
+        print("PerceiverAttention: All weights loaded with FP32 precision")
     }
 
     /// Forward pass with cross-attention (query attends to key/value)
@@ -71,9 +99,13 @@ public class PerceiverAttention: Module {
         let (B, T1, C) = (x1.shape[0], x1.shape[1], x1.shape[2])
         let T2 = x2.shape[1]
 
+        // Ensure FP32 precision for all computations
+        let x1FP32 = x1.dtype == .float32 ? x1 : x1.asType(.float32)
+        let x2FP32 = x2.dtype == .float32 ? x2 : x2.asType(.float32)
+
         // Normalize inputs
-        let x1Norm = norm(x1)
-        let x2Norm = norm(x2)
+        let x1Norm = norm(x1FP32)
+        let x2Norm = norm(x2FP32)
 
         // Project to Q, K, V
         var q = toQ(x1Norm)  // [B, T1, C]
@@ -99,7 +131,7 @@ public class PerceiverAttention: Module {
 
         // Output projection and residual
         let h = projOut(out)
-        return x1 + h
+        return x1FP32 + h
     }
 }
 
@@ -114,8 +146,15 @@ public class Perceiver: Module {
     public init(queryTokens: Int = 32, channels: Int = 1024, numHeads: Int = 4, weights: [String: MLXArray], prefix: String) {
         // Load pre-attention query (learned queries that will attend to speech)
         if let query = weights["\(prefix).pre_attention_query"] {
-            self.preAttentionQuery = query
-            print("Perceiver: Loaded pre_attention_query shape: \(query.shape)")
+            // Ensure FP32 precision for learned queries
+            if query.dtype == .float32 {
+                self.preAttentionQuery = query
+                print("Perceiver: Loaded pre_attention_query shape: \(query.shape), dtype: FP32")
+            } else {
+                print("Perceiver: Converting pre_attention_query from \(query.dtype) to FP32")
+                self.preAttentionQuery = query.asType(.float32)
+                print("Perceiver: Loaded pre_attention_query shape: \(self.preAttentionQuery.shape), dtype: FP32")
+            }
         } else {
             // Initialize with small random values (shouldn't happen if weights loaded correctly)
             let variance = sqrt(3.0) * sqrt(2.0 / Float(queryTokens + queryTokens))
@@ -127,7 +166,7 @@ public class Perceiver: Module {
             print("Perceiver: WARNING - pre_attention_query not found, using random init")
         }
 
-        // Attention block for cross-attention and self-attention
+        // Attention block for cross-attention and self-attention (with FP32 weights)
         self.attn = PerceiverAttention(
             channels: channels,
             numHeads: numHeads,
@@ -144,6 +183,9 @@ public class Perceiver: Module {
     public func callAsFunction(_ h: MLXArray) -> MLXArray {
         let B = h.shape[0]
 
+        // Ensure FP32 precision for input
+        let hFP32 = h.dtype == .float32 ? h : h.asType(.float32)
+
         // Expand query to batch size: [1, 32, C] -> [B, 32, C]
         let query: MLXArray
         if B > 1 {
@@ -152,10 +194,10 @@ public class Perceiver: Module {
             query = preAttentionQuery
         }
 
-        // Cross-attention: queries attend to speech embeddings
-        let preAtt = attn(query, h)  // [B, 32, C]
+        // Cross-attention: queries attend to speech embeddings (both FP32)
+        let preAtt = attn(query, hFP32)  // [B, 32, C]
 
-        // Self-attention: result attends to itself
+        // Self-attention: result attends to itself (both FP32)
         let out = attn(preAtt, preAtt)  // [B, 32, C]
 
         return out
