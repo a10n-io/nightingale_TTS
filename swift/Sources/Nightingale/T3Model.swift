@@ -1515,18 +1515,18 @@ public class T3Model: Module {
         print("DEBUG T3: AlignmentStreamAnalyzer initialized - text slice (\(textStart), \(textEnd))")
 
         // ============================================
-        // CREATE HYBRID MASK (bidirectional for conditioning+TEXT, causal for speech ONLY)
+        // CREATE CAUSAL MASK (fully causal like Python's LlamaModel)
         // ============================================
-        // CRITICAL: This must be BEFORE any forward passes!
+        // CRITICAL FIX: Python's LlamaModel uses fully causal attention for all tokens.
+        // The previous "hybrid mask" (bidirectional for conditioning) was incorrect and caused
+        // logit divergence from Python. Now using standard causal mask where no token can
+        // attend to future positions.
         // Sequence structure: [cond(34) | text(10) | bos1 | bos2] = 46 tokens
-        // Bidirectional region: [cond(34) | text(10) | bos1] = 45 tokens
-        // Causal region: bos2 (position 45) is the first speech token (start of autoregressive generation)
         let seqLen = inputEmb.shape[1]
-        let bidirectionalLen = finalCondLen + textLen + 1  // cond + text + first BOS (45 tokens)
-        let hybridMask = T3Model.createHybridMask(seqLen: seqLen, condLen: bidirectionalLen)
+        let causalMask = T3Model.createCausalMask(seqLen: seqLen)
             .reshaped([1, 1, seqLen, seqLen])
-        eval(hybridMask)
-        print("✅ Created hybrid mask: \(hybridMask.shape), bidirectionalLen=\(bidirectionalLen) (cond+text+bos1), bos2_at_pos=\(seqLen-1) (start of speech generation)\n")
+        eval(causalMask)
+        print("✅ Created causal mask: \(causalMask.shape), seqLen=\(seqLen) (fully causal like Python's LlamaModel)\n")
 
         // ============================================
         // DEBUG: CHECK INPUT TO LAYER 0 FOR BOTH BATCHES
@@ -1587,15 +1587,13 @@ public class T3Model: Module {
         // Fresh caches for clean debug
         let freshCache = layers.map { _ in KVCache() }
 
-        // CRITICAL: Create HYBRID mask (matching Python!)
-        // ONLY conditioning tokens (speaker + perceiver + emotion) attend bidirectionally
-        // Text tokens and speech generation tokens attend causally
+        // CRITICAL FIX: Create CAUSAL mask (matching Python's LlamaModel!)
+        // Python uses fully causal attention - no special bidirectional for conditioning.
         let seqLenDebug = inputEmb.shape[1]
-        // Python: cond_len = cond_emb.shape[1]  # Only conditioning, NOT including text!
-        let hybridMaskDebug = T3Model.createHybridMask(seqLen: seqLenDebug, condLen: finalCondLen)
+        let causalMaskDebug = T3Model.createCausalMask(seqLen: seqLenDebug)
             .reshaped([1, 1, seqLenDebug, seqLenDebug])  // Add batch and head dimensions
-        eval(hybridMaskDebug)
-        print("✅ Created hybrid mask: \(hybridMaskDebug.shape), condLen=\(finalCondLen) (bidirectional), textAndSpeech=\(seqLenDebug - finalCondLen) (causal)\n")
+        eval(causalMaskDebug)
+        print("✅ Created causal mask: \(causalMaskDebug.shape), seqLen=\(seqLenDebug) (fully causal like Python)\n")
 
         // ======== LAYER 0 ========
         print("LAYER 0:")
@@ -1611,9 +1609,9 @@ public class T3Model: Module {
 
         var layer0Output = inputEmb
         if let block0 = layers[0] as? TransformerBlock {
-            layer0Output = block0.callAsFunction(layer0Output, mask: hybridMask, cache: freshCache[0])
+            layer0Output = block0.callAsFunction(layer0Output, mask: causalMask, cache: freshCache[0])
         } else if let block0 = layers[0] as? InspectableTransformerBlock {
-            layer0Output = block0.callAsFunction(layer0Output, mask: hybridMask, cache: freshCache[0])
+            layer0Output = block0.callAsFunction(layer0Output, mask: causalMask, cache: freshCache[0])
         }
         eval(layer0Output)
 
@@ -1653,8 +1651,8 @@ public class T3Model: Module {
             print("   Batch 1, last token, first 5: \(step2B1.asArray(Float.self))")
             print()
 
-            // Step 2: Self-attention (with hybrid mask!)
-            let attnOutput = layer1Block.selfAttn(normedInput, mask: hybridMask, cache: freshCache[1])
+            // Step 2: Self-attention (with causal mask)
+            let attnOutput = layer1Block.selfAttn(normedInput, mask: causalMask, cache: freshCache[1])
             eval(attnOutput)
             print("3️⃣ After Self-Attention (before residual):")
             let step3B0 = attnOutput[0, lastToken, 0..<5]
@@ -1752,8 +1750,8 @@ public class T3Model: Module {
         // Get Layer 0
         guard let layer0 = layers[0] as? TransformerBlock else {
             print("❌ Layer 0 is not a TransformerBlock! Skipping diagnostic.")
-            // Fall through to normal forward pass with HYBRID MASK
-            var hidden = forward(inputEmb, cache: cache, mask: hybridMask)
+            // Fall through to normal forward pass with CAUSAL MASK
+            var hidden = forward(inputEmb, cache: cache, mask: causalMask)
             eval(hidden)
             var generatedTokens: [Int] = [currentToken]
             // Continue with normal generation loop...
@@ -1767,8 +1765,8 @@ public class T3Model: Module {
         let layer0InputDiag = inputEmb
         let normedInputDiag = layer0.inputLayernorm(layer0InputDiag)
 
-        // CHECKPOINT 2: Attention Output (before residual) - use HYBRID MASK
-        let checkpoint2 = layer0.selfAttn(normedInputDiag, mask: hybridMaskDebug, cache: diagnosticCache)
+        // CHECKPOINT 2: Attention Output (before residual) - use CAUSAL MASK
+        let checkpoint2 = layer0.selfAttn(normedInputDiag, mask: causalMaskDebug, cache: diagnosticCache)
         eval(checkpoint2)
         let c2_b0 = checkpoint2[0, checkpoint2.shape[1]-1, 0..<5]
         let c2_b1 = checkpoint2[1, checkpoint2.shape[1]-1, 0..<5]
@@ -1816,9 +1814,9 @@ public class T3Model: Module {
         print("CHECKPOINT 4: [-0.053507395, 0.015490528, -0.022698045, 0.010536976, -0.037663735]")
         print(String(repeating: "=", count: 60) + "\n")
 
-        // Now run FULL forward pass for actual generation WITH HYBRID MASK
-        // CRITICAL: Use hybridMask (bidirectional for conditioning) not initialMask (fully causal)!
-        var hidden = forward(inputEmb, cache: cache, mask: hybridMask)
+        // Now run FULL forward pass for actual generation with CAUSAL MASK
+        // CRITICAL FIX: Use fully causal mask like Python's LlamaModel
+        var hidden = forward(inputEmb, cache: cache, mask: causalMask)
         eval(hidden) // Force computation and clear graph
 
         var generatedTokens: [Int] = [currentToken]
@@ -1950,7 +1948,7 @@ public class T3Model: Module {
                 // - Force EOS on repetition/hallucination detection (prevents loops)
                 // ============================================
                 let capturedAttention = getCapturedAttentionWeights()
-                let analyzerEnabled = false  // DISABLED: Was suppressing EOS token (see DEBUG_INVESTIGATION.md)
+                let analyzerEnabled = true  // ENABLED: Matches Python multilingual model behavior
                 if analyzerEnabled && !capturedAttention.isEmpty {
                     let lastGeneratedToken = generatedTokens.last
                     logitsFlat = analyzer.step(
