@@ -829,6 +829,26 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
     }
 
     // =========================================================================
+    // PIPELINE FLOW: Fail-fast if Step 1 failed
+    // =========================================================================
+    if !step1Pass {
+        print("\n" + String(repeating: "=", count: 80))
+        print("❌ PIPELINE STOPPED: Step 1 (Tokenization) FAILED")
+        print(String(repeating: "=", count: 80))
+        print("\nCannot proceed to subsequent steps with incorrect tokenization.")
+        print("Swift's tokens differ from Python's reference tokens.")
+        print("\nPipeline verification requires exact token match to ensure:")
+        print("  • Step 3 (T3 Generation) would receive correct input")
+        print("  • Downstream stages (S3Gen) operate on valid data")
+        print("\nPlease fix tokenization issues before running full pipeline.")
+        print(String(repeating: "=", count: 80))
+        throw NSError(domain: "VerifyLive", code: 1,
+                      userInfo: [NSLocalizedDescriptionKey: "Step 1 tokenization failed - pipeline stopped"])
+    }
+
+    print("\n✅ Step 1 PASSED - proceeding with Swift's tokens for pipeline")
+
+    // =========================================================================
     // STEP 2: T3 CONDITIONING
     // =========================================================================
     print("\n" + String(repeating: "=", count: 80))
