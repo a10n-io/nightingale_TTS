@@ -1376,7 +1376,9 @@ public class T3Model: Module {
         temperature: Float = 0.8,   // Python default: 0.8
         emotionValue: Float = 0.5,  // Default emotion value
         cfgWeight: Float = 0.5,     // Python default: 0.5
-        repetitionPenalty: Float = 1.2  // Python default: 1.2
+        repetitionPenalty: Float = 1.2,  // Python default: 1.2
+        topP: Float = 0.95,         // Python default: 0.95 (use 1.0 for greedy/verification)
+        minP: Float = 0.05          // Python default: 0.05
     ) -> [Int] {
         print("🚨🚨🚨 LAYER 0 DEBUG BUILD \(Date()) 🚨🚨🚨")
         print("DEBUG T3: generate() called with CFG weight: \(cfgWeight)")
@@ -1938,8 +1940,7 @@ public class T3Model: Module {
 
                 // Sample with temperature, repetition penalty, and top-p + invalid token filtering
                 // Also filter out tokens >= 6561 (invalid for S3Gen)
-                let topP: Float = 0.95  // Python default
-                let minP: Float = 0.05  // Python default
+                // topP and minP are now passed as function parameters
 
                 var logitsFlat = logits.reshaped([-1])  // [vocabSize] - apply temp after filtering
 

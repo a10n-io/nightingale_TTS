@@ -998,11 +998,13 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
     if hasStep3References {
         print("\nRunning T3 generation with Swift...")
 
-        // Generation parameters (matching Python E2E test)
+        // Generation parameters (matching Python E2E test - verify_e2e.py lines 251-256)
         let step3Temperature: Float = 0.001  // Low temperature for deterministic generation
         let step3MaxTokens: Int = 1000
         let step3CFGWeight: Float = 0.5
         let step3RepPenalty: Float = 2.0
+        let step3TopP: Float = 1.0    // Python uses top_p=1.0 (disabled) for verification
+        let step3MinP: Float = 0.05   // Python default
 
         // IMPORTANT: T3Model.generate() expects SINGLE-batch text tokens [1, N+2]
         // with SOT prepended and EOT appended, matching Python's prepare_input_embeds
@@ -1020,7 +1022,9 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
             maxTokens: step3MaxTokens,
             temperature: step3Temperature,
             cfgWeight: step3CFGWeight,
-            repetitionPenalty: step3RepPenalty
+            repetitionPenalty: step3RepPenalty,
+            topP: step3TopP,
+            minP: step3MinP
         )
 
         print("  Swift generated \(swiftSpeechTokens.count) tokens")
@@ -1054,7 +1058,7 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
         step3Pass = swiftFiltered.count == refArray.count && matchCount == totalTokens
 
         if step3Pass {
-            print("\nStep 3 (T3 Generation): ✅ PASSED (exact token match)")
+            print("\nStep 3 (T3 Generation): ✅ PASSED (exact match)")
         } else {
             print("\nStep 3 (T3 Generation): ⚠️  PARTIAL (tokens differ - expected due to sampling)")
             print("  Note: With temperature=\(String(format: "%.3f", step3Temperature)), some variation is expected")
