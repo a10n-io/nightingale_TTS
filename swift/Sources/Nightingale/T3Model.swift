@@ -2009,8 +2009,9 @@ public class T3Model: Module {
                 // This allows the model to naturally generate SOS/EOS tokens
 
                 // Handle temperature=0.0 (greedy/argmax) specially to avoid division by zero
+                // Use argmax for very low temperatures to ensure deterministic output
                 let nextToken: Int
-                if temperature <= 0.0001 {  // Close to zero - use argmax
+                if temperature <= 0.01 {  // Temperature <= 0.01 uses greedy decoding for determinism
                     let tokenIdx = Int(argMax(logitsFlat, axis: -1).item(Int32.self))
                     nextToken = tokenIdx
                 } else {

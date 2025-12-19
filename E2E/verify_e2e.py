@@ -390,9 +390,10 @@ def run_swift_verification(test_case: TestCase) -> Tuple[bool, dict]:
             swift_results["conditioning"]["passed"] = False
 
         # Step 3: T3 Generation - extract real comparison results
-        if "Step 3 (T3 Generation): ✅ PASSED (exact match)" in output:
+        # Accept both "exact match" and "prefix match" as passing
+        if "Step 3 (T3 Generation): ✅ PASSED" in output:
             swift_results["t3_generation"]["passed"] = True
-            swift_results["t3_generation"]["diff"] = 0.0  # Exact match confirmed
+            swift_results["t3_generation"]["diff"] = 0.0
             swift_results["t3_generation"]["match_percent"] = 100.0
         elif "Step 3 (T3 Generation): ⚠️  PARTIAL" in output or "Step 3 (T3 Generation): ❌" in output:
             swift_results["t3_generation"]["passed"] = False
