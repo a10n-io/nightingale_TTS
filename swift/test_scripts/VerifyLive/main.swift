@@ -130,8 +130,10 @@ func preprocessText(_ text: String) -> String {
     // 1. Lowercase
     var processed = text.lowercased()
 
-    // 2. NFKD normalization
-    processed = processed.precomposedStringWithCompatibilityMapping
+    // 2. NFKD normalization (decomposed, not composed!)
+    // CRITICAL: Python uses normalize("NFKD") which DECOMPOSES
+    // Swift equivalent: decomposedStringWithCompatibilityMapping
+    processed = processed.decomposedStringWithCompatibilityMapping
 
     // 3. Replace space with [SPACE] token
     processed = processed.replacingOccurrences(of: " ", with: "[SPACE]")
@@ -178,7 +180,7 @@ func bpeEncode(word: String, vocab: [String: Int], mergeRanks: [String: Int]) ->
     return tokenIds
 }
 
-func tokenize(_ text: String, vocab: [String: Int], merges: [(String, String)]) -> [Int] {
+func tokenize(_ text: String, vocab: [String: Int], merges: [(String, String)], languageId: String? = nil) -> [Int] {
     // Preprocess text like Python's MTLTokenizer
     let processed = preprocessText(text)
 
@@ -194,6 +196,17 @@ func tokenize(_ text: String, vocab: [String: Int], merges: [(String, String)]) 
     // 3. Add the [SPACE] token between words
 
     var tokens: [Int] = []
+
+    // CRITICAL: Prepend language token ID if provided (matching Python's behavior)
+    // Python adds language token BEFORE BPE encoding, then the token appears as-is
+    // Language tokens like [en], [nl] are special vocab entries, not BPE-encoded
+    if let langId = languageId {
+        let langToken = "[\(langId.lowercased())]"
+        if let langTokenId = vocab[langToken] {
+            tokens.append(langTokenId)
+        }
+    }
+
     let parts = processed.components(separatedBy: "[SPACE]")
 
     for (i, part) in parts.enumerated() {
@@ -219,7 +232,7 @@ func maxDiff(_ a: MLXArray, _ b: MLXArray) -> Float {
     return abs(a - b).max().item(Float.self)
 }
 
-func loadConfig(from url: URL? = nil) throws -> (text: String, voice: String) {
+func loadConfig(from url: URL? = nil) throws -> (text: String, voice: String, language: String) {
     let configURL = url ?? URL(fileURLWithPath: "\(DEFAULT_VERIFY_PATH)/config.json")
     let data = try Data(contentsOf: configURL)
     let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -227,7 +240,8 @@ func loadConfig(from url: URL? = nil) throws -> (text: String, voice: String) {
           let voice = json?["voice"] as? String else {
         throw NSError(domain: "VerifyLive", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid config.json"])
     }
-    return (text, voice)
+    let language = json?["language"] as? String ?? "en"  // Default to "en" if not specified
+    return (text, voice, language)
 }
 
 // MARK: - T3 Key Remapping
@@ -614,17 +628,20 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
 
     let configPath = verifyURL.appendingPathComponent("config.json")
     let metadataPath = verifyURL.appendingPathComponent("metadata.json")
+    var languageId = "en"  // Default language
 
     if FileManager.default.fileExists(atPath: configPath.path) {
-        let (loadedText, loadedVoice) = try loadConfig(from: configPath)
+        let (loadedText, loadedVoice, loadedLanguage) = try loadConfig(from: configPath)
         text = loadedText
         actualVoiceName = loadedVoice
+        languageId = loadedLanguage
     } else if FileManager.default.fileExists(atPath: metadataPath.path) {
         // Load from E2E metadata format
         let data = try Data(contentsOf: metadataPath)
         if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
             text = json["text"] as? String ?? "Hello world"
             actualVoiceName = json["voice"] as? String ?? voiceName
+            languageId = json["language"] as? String ?? "en"
         }
     }
 
@@ -670,7 +687,9 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
     print("STEP 1: TEXT TOKENIZATION")
     print(String(repeating: "=", count: 80))
 
-    let swiftTokens = tokenize(text, vocab: vocab, merges: merges)
+    print("Text to tokenize: \"\(text)\"")
+    print("Language ID: \(languageId)")
+    let swiftTokens = tokenize(text, vocab: vocab, merges: merges, languageId: languageId)
     print("Swift tokens: \(swiftTokens)")
 
     // Load Python reference
@@ -678,19 +697,10 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
     let pythonTokensArray = pythonTokens.asArray(Int32.self).map { Int($0) }
     print("Python tokens: \(pythonTokensArray)")
 
-    // In E2E mode (ref-dir provided), skip token comparison as E2E uses language-specific tokenization
-    let isE2EMode = refDirOverride != nil
-    var step1Pass: Bool
-    if isE2EMode {
-        // In E2E mode, just verify reference exists - tokenization differs due to language ID
-        step1Pass = pythonTokensArray.count > 0
-        print("E2E mode: Skipping token comparison (language-specific tokenization)")
-        print("Reference valid: \(step1Pass ? "✅ YES" : "❌ NO")")
-    } else {
-        let tokensMatch = swiftTokens == pythonTokensArray
-        step1Pass = tokensMatch
-        print("Match: \(tokensMatch ? "✅ YES" : "❌ NO")")
-    }
+    // HONEST: Always do exact token comparison
+    let tokensMatch = swiftTokens == pythonTokensArray
+    let step1Pass = tokensMatch
+    print("Match: \(tokensMatch ? "✅ YES" : "❌ NO")")
 
     // =========================================================================
     // STEP 2: T3 CONDITIONING
@@ -762,11 +772,12 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
     // =========================================================================
     // STEPS 5-8: S3Gen Full Numerical Verification
     // =========================================================================
-    var step5Pass = true
-    var step6Pass = true
-    var step7aPass = true
-    var step7Pass = true
-    var step8Pass = true
+    // HONEST DEFAULTS: Fail unless tests actually run and pass
+    var step5Pass = false
+    var step6Pass = false
+    var step7aPass = false
+    var step7Pass = false
+    var step8Pass = false
 
     let step5FullTokensPath = verifyURL.appendingPathComponent("step5_full_tokens.npy")
     let hasS3GenReferences = FileManager.default.fileExists(atPath: step5FullTokensPath.path)
