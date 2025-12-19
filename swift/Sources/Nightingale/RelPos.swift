@@ -105,13 +105,13 @@ public class RelPositionMultiHeadAttention: Module {
     let scale: Float
 
     // Use same property names as remapping expects: linear_q -> queryProj, etc.
-    public let queryProj: Linear
-    public let keyProj: Linear
-    public let valueProj: Linear
-    public let outProj: Linear
+    public let queryProj: FixedLinear
+    public let keyProj: FixedLinear
+    public let valueProj: FixedLinear
+    public let outProj: FixedLinear
 
     // RelPos specific
-    public let linearPos: Linear
+    public let linearPos: FixedLinear
     public var posBiasU: MLXArray // [H, D_h] - var so weights can be loaded
     public var posBiasV: MLXArray // [H, D_h] - var so weights can be loaded
 
@@ -145,12 +145,12 @@ public class RelPositionMultiHeadAttention: Module {
             fatalError("RelPositionMultiHeadAttention: dModel=640 is wrong! Should be 512.")
         }
 
-        self.queryProj = Linear(dModel, dModel)
-        self.keyProj = Linear(dModel, dModel)
-        self.valueProj = Linear(dModel, dModel)
-        self.outProj = Linear(dModel, dModel)
+        self.queryProj = FixedLinear(dModel, dModel, name: "RelPosAttn.queryProj")
+        self.keyProj = FixedLinear(dModel, dModel, name: "RelPosAttn.keyProj")
+        self.valueProj = FixedLinear(dModel, dModel, name: "RelPosAttn.valueProj")
+        self.outProj = FixedLinear(dModel, dModel, name: "RelPosAttn.outProj")
 
-        self.linearPos = Linear(dModel, dModel, bias: false)
+        self.linearPos = FixedLinear(dModel, dModel, bias: false, name: "RelPosAttn.linearPos")
 
         // Initialize biases
         self.posBiasU = MLXRandom.uniform(low: -1, high: 1, [numHeads, dHead])

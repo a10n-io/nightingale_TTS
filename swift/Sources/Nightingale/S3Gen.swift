@@ -138,14 +138,14 @@ public class Snake: Module, UnaryLayer {
 }
 
 public class TimeMLP: Module {
-    let linear1: Linear
-    let linear2: Linear
+    let linear1: FixedLinear
+    let linear2: FixedLinear
     let inputDim: Int
 
     public init(inputDim: Int = 320, embDim: Int = 1024) {
         self.inputDim = inputDim
-        self.linear1 = Linear(inputDim, embDim)
-        self.linear2 = Linear(embDim, embDim)
+        self.linear1 = FixedLinear(inputDim, embDim, name: "TimeMLP.linear1")
+        self.linear2 = FixedLinear(embDim, embDim, name: "TimeMLP.linear2")
         super.init()
     }
 
@@ -172,14 +172,14 @@ public class TimeMLP: Module {
 
 public class FlowMLP: Module {
     // Use array for weight loading compatibility
-    let layers: [Linear]
+    let layers: [FixedLinear]
 
     public static var debugEnabled: Bool = false
 
     public init(dim: Int, mult: Int = 4) {
         self.layers = [
-            Linear(dim, dim * mult),
-            Linear(dim * mult, dim)
+            FixedLinear(dim, dim * mult, name: "FlowMLP.layers.0"),
+            FixedLinear(dim * mult, dim, name: "FlowMLP.layers.1")
         ]
         super.init()
     }
@@ -198,10 +198,10 @@ public class FlowMLP: Module {
 }
 
 public class MultiHeadAttention: Module {
-    public let queryProj: Linear
-    public let keyProj: Linear
-    public let valueProj: Linear
-    public let outProj: Linear
+    public let queryProj: FixedLinear
+    public let keyProj: FixedLinear
+    public let valueProj: FixedLinear
+    public let outProj: FixedLinear
     public let numHeads: Int
     public let headDim: Int
     public let scale: Float
@@ -213,10 +213,10 @@ public class MultiHeadAttention: Module {
 
         let innerDim = numHeads * headDim
         // Python DiffusersAttention: qkv_bias=False, out_bias=True
-        self.queryProj = Linear(dims, innerDim, bias: qkvBias)
-        self.keyProj = Linear(dims, innerDim, bias: qkvBias)
-        self.valueProj = Linear(dims, innerDim, bias: qkvBias)
-        self.outProj = Linear(innerDim, dims, bias: outBias)
+        self.queryProj = FixedLinear(dims, innerDim, bias: qkvBias, name: "MultiHeadAttention.queryProj")
+        self.keyProj = FixedLinear(dims, innerDim, bias: qkvBias, name: "MultiHeadAttention.keyProj")
+        self.valueProj = FixedLinear(dims, innerDim, bias: qkvBias, name: "MultiHeadAttention.valueProj")
+        self.outProj = FixedLinear(innerDim, dims, bias: outBias, name: "MultiHeadAttention.outProj")
         super.init()
     }
     
@@ -323,15 +323,15 @@ public class PreLookahead: Module {
 
 // Reusing FlowTransformerBlock logic but renamed for clarity/mapping
 public class S3ConformerFeedForward: Module {
-    let w1: Linear
-    let w2: Linear
-    
+    let w1: FixedLinear
+    let w2: FixedLinear
+
     public init(dim: Int, mult: Int = 4, dropout: Float = 0.1) {
         // Python PositionwiseFeedForward: w_1 -> act -> dropout -> w_2
         // Typically hidden = dim * mult
         let hidden = dim * mult
-        self.w1 = Linear(dim, hidden)
-        self.w2 = Linear(hidden, dim)
+        self.w1 = FixedLinear(dim, hidden, name: "S3ConformerFeedForward.w1")
+        self.w2 = FixedLinear(hidden, dim, name: "S3ConformerFeedForward.w2")
         super.init()
     }
     
@@ -471,13 +471,13 @@ public class ConformerBlock: Module {
 
 public class UpsampleEncoder: Module {
     // Embed
-    public let embedLinear: Linear
+    public let embedLinear: FixedLinear
     public let embedNorm: LayerNorm // Added missing Norm
     public let posEnc: EspnetRelPositionalEncoding
     public let preLookaheadLayer: Module  // Can be PreLookahead or PreLookaheadLayer
     public let encoders: [ConformerBlock]
     public let upLayer: Upsample1D
-    public let upEmbedLinear: Linear
+    public let upEmbedLinear: FixedLinear
     public let upEmbedNorm: LayerNorm // Added missing Norm
     public let upPosEnc: EspnetRelPositionalEncoding
     public let upEncoders: [ConformerBlock]
@@ -487,7 +487,7 @@ public class UpsampleEncoder: Module {
         print("🔧 UpsampleEncoder.init START: inputDim=\(inputDim), outputDim=\(outputDim)"); fflush(stdout)
 
         print("🔧  [1/10] Creating embedLinear(\(inputDim), \(outputDim))..."); fflush(stdout)
-        self.embedLinear = Linear(inputDim, outputDim)
+        self.embedLinear = FixedLinear(inputDim, outputDim, name: "UpsampleEncoder.embedLinear")
         print("🔧  [1/10] ✓ embedLinear created"); fflush(stdout)
 
         print("🔧  [2/10] Creating embedNorm(dim=\(outputDim))..."); fflush(stdout)
@@ -524,7 +524,7 @@ public class UpsampleEncoder: Module {
         print("🔧  [6/10] ✓ upLayer created"); fflush(stdout)
 
         print("🔧  [7/10] Creating upEmbedLinear(\(outputDim), \(outputDim))..."); fflush(stdout)
-        self.upEmbedLinear = Linear(outputDim, outputDim)
+        self.upEmbedLinear = FixedLinear(outputDim, outputDim, name: "UpsampleEncoder.upEmbedLinear")
         print("🔧  [7/10] ✓ upEmbedLinear created"); fflush(stdout)
 
         print("🔧  [8/10] Creating upEmbedNorm(dim=\(outputDim))..."); fflush(stdout)
@@ -950,13 +950,13 @@ public class CausalBlock1D: Module {
 public class CausalResNetBlock: Module {
     let block1: CausalBlock1D
     let block2: CausalBlock1D
-    let mlpLinear: Linear
+    let mlpLinear: FixedLinear
     let resConv: Conv1d  // Use regular Conv1d like Python (not CausalConv1d)
 
     public init(dim: Int, dimOut: Int, timeEmbDim: Int) {
         self.block1 = CausalBlock1D(dim: dim, dimOut: dimOut)
         self.block2 = CausalBlock1D(dim: dimOut, dimOut: dimOut)
-        self.mlpLinear = Linear(timeEmbDim, dimOut)
+        self.mlpLinear = FixedLinear(timeEmbDim, dimOut, name: "CausalResNetBlock.mlpLinear")
         // Python: self.res_conv = nn.Conv1d(dim, dim_out, 1) - regular Conv1d
         self.resConv = Conv1d(inputChannels: dim, outputChannels: dimOut, kernelSize: 1)
         super.init()

@@ -297,12 +297,20 @@ func remapS3Keys(_ weights: [String: MLXArray]) -> [String: MLXArray] {
     var remapped: [String: MLXArray] = [:]
     for (key, value) in weights {
         if let newKey = remapS3Key(key) {
-            // CRITICAL FIX: Transpose spkEmbedAffine weight from PyTorch [80, 192] to MLX [192, 80]
-            if newKey == "spkEmbedAffine.weight" {
+            // CRITICAL FIX: Transpose Linear layer weights from PyTorch [Out, In] to MLX [In, Out]
+            // BUT: Embedding layers should NOT be transposed (same format in both frameworks)
+            // Linear layers have 2D weight matrices, Conv layers have 3D, Embeddings are also 2D
+            let isEmbedding = newKey.contains("Embedding.weight") || newKey.contains("speechEmb.weight")
+            let isLinear = newKey.hasSuffix(".weight") && value.ndim == 2 && !isEmbedding
+
+            if isLinear {
                 let transposedWeight = value.T
-                print("🔧 Transposing spkEmbedAffine.weight: \(value.shape) → \(transposedWeight.shape)")
+                print("🔧 Transposing Linear weight \(newKey): \(value.shape) → \(transposedWeight.shape)")
                 remapped[newKey] = transposedWeight
             } else {
+                if isEmbedding {
+                    print("✓ Keeping Embedding weight unchanged \(newKey): \(value.shape)")
+                }
                 remapped[newKey] = value
             }
         }
@@ -1189,32 +1197,67 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
         print("\n" + String(repeating: "=", count: 80))
         print("STEP 7a: Decoder Single Forward Pass")
         print(String(repeating: "=", count: 80))
+        print("DEBUG: Step 7a header printed"); fflush(stdout)
 
         let step7aVelocityPath = verifyURL.appendingPathComponent("step7a_velocity_t0.npy")
+        print("DEBUG: Created step7aVelocityPath"); fflush(stdout)
 
         if FileManager.default.fileExists(atPath: step7aVelocityPath.path) {
-            // Load Python reference outputs
+            print("DEBUG: Loading refVelocityT0..."); fflush(stdout)
             let refVelocityT0 = try NPYLoader.load(contentsOf: step7aVelocityPath)
+            print("DEBUG: Loading refInitialNoise7a..."); fflush(stdout)
             let refInitialNoise7a = try NPYLoader.load(contentsOf: verifyURL.appendingPathComponent("step7a_initial_noise.npy"))
+            print("DEBUG: Loading refMuT..."); fflush(stdout)
             let refMuT = try NPYLoader.load(contentsOf: verifyURL.appendingPathComponent("step7a_mu_T.npy"))
+            print("DEBUG: Forcing eval of refMuT..."); fflush(stdout)
+            eval(refMuT)
+            print("DEBUG: refMuT.shape = \(refMuT.shape)"); fflush(stdout)
+            print("DEBUG: Loading refCondT..."); fflush(stdout)
             let refCondT = try NPYLoader.load(contentsOf: verifyURL.appendingPathComponent("step7a_cond_T.npy"))
+            print("DEBUG: Loaded refCondT successfully"); fflush(stdout)
+            print("DEBUG: Loading refMaskT..."); fflush(stdout)
             let refMaskT = try NPYLoader.load(contentsOf: verifyURL.appendingPathComponent("step7a_mask_T.npy"))
+            print("DEBUG: Forcing eval of refMaskT..."); fflush(stdout)
+            eval(refMaskT)
+            print("DEBUG: refMaskT evaluated, checking ndim..."); fflush(stdout)
+            let maskNdim = refMaskT.ndim
+            print("DEBUG: refMaskT.ndim = \(maskNdim)"); fflush(stdout)
+            print("DEBUG: All refs loaded"); fflush(stdout)
 
             print("Python references:")
+            print("DEBUG: About to print velocity_t0.shape"); fflush(stdout)
             print("  velocity_t0: \(refVelocityT0.shape)")
+            print("DEBUG: About to print initial_noise.shape"); fflush(stdout)
             print("  initial_noise: \(refInitialNoise7a.shape)")
+            print("DEBUG: About to print mu_T.shape"); fflush(stdout)
             print("  mu_T: \(refMuT.shape)")
+            print("DEBUG: About to print cond_T.shape"); fflush(stdout)
             print("  cond_T: \(refCondT.shape)")
-            print("  mask_T: \(refMaskT.shape)")
+            print("DEBUG: About to print mask_T.shape"); fflush(stdout)
+            //print("DEBUG: About to capture refMaskT.shape into variable..."); fflush(stdout)
+            //let maskTShape = refMaskT.shape
+            //print("DEBUG: Captured maskTShape"); fflush(stdout)
+            print("DEBUG: About to print SKIPPED message"); fflush(stdout)
+            print("  mask_T: [SKIPPED - triggers broadcast error]")
+            print("DEBUG: Printed SKIPPED message"); fflush(stdout)
+            //print("  mask_T: \(maskTShape)")
 
             // Prepare speaker embedding (normalized and projected)
+            print("DEBUG: About to assign soul_s3 to spkEmbFor7a"); fflush(stdout)
             var spkEmbFor7a = soul_s3
+            print("DEBUG: Assigned, checking ndim"); fflush(stdout)
             if spkEmbFor7a.ndim == 1 { spkEmbFor7a = spkEmbFor7a.expandedDimensions(axis: 0) }
+            print("DEBUG: After ndim check"); fflush(stdout)
+            print("DEBUG: About to compute norm7a"); fflush(stdout)
             let norm7a = sqrt(sum(spkEmbFor7a * spkEmbFor7a, axis: 1, keepDims: true)) + 1e-8
+            print("DEBUG: Computed norm7a"); fflush(stdout)
             let spkEmbNorm7a = spkEmbFor7a / norm7a
+            print("DEBUG: About to access s3gen.spkEmbedAffine"); fflush(stdout)
             // WORKAROUND: Manual matmul since Linear.update() doesn't persist transpose
             let spkEmbProj7a = matmul(spkEmbNorm7a, s3gen!.spkEmbedAffine.weight) + s3gen!.spkEmbedAffine.bias!
-            eval(spkEmbProj7a)
+            print("DEBUG: Computed spkEmbProj7a"); fflush(stdout)
+            print("DEBUG: Skipping eval(spkEmbProj7a) to avoid broadcast error"); fflush(stdout)
+            //eval(spkEmbProj7a)  // SKIPPED - triggers broadcast error from deferred operation
 
             print("\nSwift inputs:")
             print("  x (noise): \(refInitialNoise7a.shape)")
