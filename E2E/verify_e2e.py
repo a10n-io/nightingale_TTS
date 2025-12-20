@@ -310,6 +310,19 @@ def generate_python_reference(model, test_case: TestCase, device: str, max_step:
     spk_emb_proj = model.s3gen.flow.spk_embed_affine_layer(spk_emb_normalized)
     outputs["step5_spk_emb"] = spk_emb_proj.detach().cpu().numpy()
 
+    # Token lengths for mask creation
+    prompt_token_len = gen_conds["prompt_token_len"].item()
+    # speech_tokens may be 1D or 2D depending on processing
+    speech_token_len = speech_tokens.shape[0] if speech_tokens.dim() == 1 else speech_tokens.shape[1]
+    outputs["step5_prompt_token_len"] = np.array([prompt_token_len], dtype=np.int32)
+    outputs["step5_speech_token_len"] = np.array([speech_token_len], dtype=np.int32)
+
+    # Attention mask: 1 for valid positions, 0 for padding
+    # Full sequence length = prompt_token_len + speech_token_len
+    total_len = prompt_token_len + speech_token_len
+    mask = torch.ones(1, total_len, dtype=torch.int32, device=device)  # Use int32 for Swift NPY loader compatibility
+    outputs["step5_mask"] = mask.detach().cpu().numpy().astype(np.int32)
+
     # Steps 6-8: DISABLED FOR NOW - Will add after Steps 1-5 working
     # Step 6: S3Gen Encoder
     # Step 7: Full ODE generation
