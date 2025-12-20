@@ -1173,7 +1173,9 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
     var swift_emotion_adv: MLXArray? = nil
     var swift_soul_s3: MLXArray? = nil
     var swift_prompt_token: MLXArray? = nil
+    var swift_prompt_token_len: MLXArray? = nil
     var swift_prompt_feat: MLXArray? = nil
+    var swift_prompt_feat_len: MLXArray? = nil
 
     if hasNpyOriginal {
         print("\n4.1: LOADING SWIFT VOICE DATA FROM npy_original/")
@@ -1196,11 +1198,17 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
         swift_prompt_token = try NPYLoader.load(contentsOf: npy_original_URL.appendingPathComponent("prompt_token.npy"))
         print("  prompt_token: \(swift_prompt_token!.shape)")
 
+        swift_prompt_token_len = try NPYLoader.load(contentsOf: npy_original_URL.appendingPathComponent("prompt_token_len.npy"))
+        print("  prompt_token_len: \(swift_prompt_token_len!.item(Int32.self))")
+
         swift_prompt_feat = try NPYLoader.load(contentsOf: npy_original_URL.appendingPathComponent("prompt_feat.npy"))
         print("  prompt_feat: \(swift_prompt_feat!.shape)")
 
+        swift_prompt_feat_len = try NPYLoader.load(contentsOf: npy_original_URL.appendingPathComponent("prompt_feat_len.npy"))
+        print("  prompt_feat_len: \(swift_prompt_feat_len!.item(Int32.self))")
+
         // Evaluate all loaded arrays
-        eval(swift_soul_t3!, swift_t3_cond_tokens!, swift_emotion_adv!, swift_soul_s3!, swift_prompt_token!, swift_prompt_feat!)
+        eval(swift_soul_t3!, swift_t3_cond_tokens!, swift_emotion_adv!, swift_soul_s3!, swift_prompt_token!, swift_prompt_token_len!, swift_prompt_feat!, swift_prompt_feat_len!)
         print("  ✅ All voice data loaded and evaluated")
 
         if hasStep4References {
@@ -1265,6 +1273,26 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
                 let prompt_feat_match = prompt_feat_diff < step4Threshold
                 allMatch = allMatch && prompt_feat_match
                 print("  prompt_feat: \(prompt_feat_match ? "✅" : "❌") diff=\(String(format: "%.2e", prompt_feat_diff))")
+            }
+
+            // Compare prompt_token_len
+            let step4PromptTokenLenPath = verifyURL.appendingPathComponent("step4_s3_prompt_token_len.npy")
+            if FileManager.default.fileExists(atPath: step4PromptTokenLenPath.path) {
+                let ref_prompt_token_len = try NPYLoader.load(contentsOf: step4PromptTokenLenPath)
+                let prompt_token_len_diff = maxDiff(swift_prompt_token_len!.asType(.float32), ref_prompt_token_len.asType(.float32))
+                let prompt_token_len_match = prompt_token_len_diff < step4Threshold
+                allMatch = allMatch && prompt_token_len_match
+                print("  prompt_token_len: \(prompt_token_len_match ? "✅" : "❌") diff=\(String(format: "%.2e", prompt_token_len_diff))")
+            }
+
+            // Compare prompt_feat_len
+            let step4PromptFeatLenPath = verifyURL.appendingPathComponent("step4_s3_prompt_feat_len.npy")
+            if FileManager.default.fileExists(atPath: step4PromptFeatLenPath.path) {
+                let ref_prompt_feat_len = try NPYLoader.load(contentsOf: step4PromptFeatLenPath)
+                let prompt_feat_len_diff = maxDiff(swift_prompt_feat_len!.asType(.float32), ref_prompt_feat_len.asType(.float32))
+                let prompt_feat_len_match = prompt_feat_len_diff < step4Threshold
+                allMatch = allMatch && prompt_feat_len_match
+                print("  prompt_feat_len: \(prompt_feat_len_match ? "✅" : "❌") diff=\(String(format: "%.2e", prompt_feat_len_diff))")
             }
 
             step4Pass = allMatch
