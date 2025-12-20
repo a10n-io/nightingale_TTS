@@ -261,12 +261,37 @@ def generate_python_reference(model, test_case: TestCase, device: str, max_step:
 
     outputs["step3_speech_tokens"] = speech_tokens.squeeze(0).detach().cpu().numpy().astype(np.int32)
 
-    # Step 4: S3Gen embedding info
-    gen_conds = model.conds.gen
-    outputs["step4_embedding"] = gen_conds["embedding"].detach().cpu().numpy()
-    outputs["step4_prompt_token"] = gen_conds["prompt_token"].detach().cpu().numpy().astype(np.int32)
-    outputs["step4_prompt_feat"] = gen_conds["prompt_feat"].detach().cpu().numpy()
+    # =========================================================================
+    # Step 4: Voice Conditioning (T3 + S3Gen)
+    # =========================================================================
+    # This step exports ALL conditioning values from the baked voice.
+    # For true E2E verification, Swift loads from npy_original/ and should match exactly.
 
+    # 4.1: T3 Conditioning (from model.conds.t3)
+    t3_conds = model.conds.t3
+    outputs["step4_t3_speaker_emb"] = t3_conds.speaker_emb.detach().cpu().numpy().astype(np.float32)
+    outputs["step4_t3_cond_tokens"] = t3_conds.cond_prompt_speech_tokens.detach().cpu().numpy().astype(np.int32)
+    outputs["step4_t3_emotion_adv"] = t3_conds.emotion_adv.detach().cpu().numpy().astype(np.float32)
+
+    # 4.2: S3Gen Conditioning (from model.conds.gen)
+    gen_conds = model.conds.gen
+    outputs["step4_s3_embedding"] = gen_conds["embedding"].detach().cpu().numpy().astype(np.float32)
+    outputs["step4_s3_prompt_token"] = gen_conds["prompt_token"].detach().cpu().numpy().astype(np.int32)
+    outputs["step4_s3_prompt_token_len"] = gen_conds["prompt_token_len"].detach().cpu().numpy().astype(np.int32)
+    outputs["step4_s3_prompt_feat"] = gen_conds["prompt_feat"].detach().cpu().numpy().astype(np.float32)
+    # prompt_feat_len may be None
+    if gen_conds.get("prompt_feat_len") is not None:
+        outputs["step4_s3_prompt_feat_len"] = gen_conds["prompt_feat_len"].detach().cpu().numpy().astype(np.int32)
+    else:
+        # Infer from prompt_feat shape
+        outputs["step4_s3_prompt_feat_len"] = np.array([gen_conds["prompt_feat"].shape[1]], dtype=np.int32)
+
+    # Legacy aliases for backward compatibility (Step 5 uses these)
+    outputs["step4_embedding"] = outputs["step4_s3_embedding"]
+    outputs["step4_prompt_token"] = outputs["step4_s3_prompt_token"]
+    outputs["step4_prompt_feat"] = outputs["step4_s3_prompt_feat"]
+
+    # =========================================================================
     # Step 5: S3Gen Input Preparation
     prompt_token = gen_conds["prompt_token"]
     prompt_feat = gen_conds["prompt_feat"]
@@ -375,7 +400,7 @@ def run_swift_verification(test_case: TestCase) -> Tuple[bool, dict]:
         elif "Step 1 (Tokenization): ❌" in output:
             swift_results["tokenization"]["passed"] = False
 
-        if "Step 2 (Conditioning): ✅ PASSED" in output:
+        if "Step 2 (T3 Conditioning): ✅ PASSED" in output:
             swift_results["conditioning"]["passed"] = True
             # Extract REAL max_diff from output
             match = re.search(r"final_cond max_diff: ([\d.e+-]+)", output)
@@ -386,7 +411,7 @@ def run_swift_verification(test_case: TestCase) -> Tuple[bool, dict]:
                 match = re.search(r"final_cond: ([\d.e+-]+)", output)
                 if match:
                     swift_results["conditioning"]["diff"] = float(match.group(1))
-        elif "Step 2 (Conditioning): ❌" in output:
+        elif "Step 2 (T3 Conditioning): ❌" in output:
             swift_results["conditioning"]["passed"] = False
 
         # Step 3: T3 Generation - extract real comparison results
