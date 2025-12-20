@@ -919,7 +919,7 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
     let step2RefPath = verifyURL.appendingPathComponent("step2_speaker_token.npy")
     let hasStep2References = FileManager.default.fileExists(atPath: step2RefPath.path)
     var step2Pass = false  // Default to false, will be set to true if verification passes
-    let step2Threshold: Float = 5e-6  // Threshold for PyTorch/MLX cross-framework precision
+    let step2Threshold: Float = 3e-6  // Just above observed 2.26e-06 Perceiver divergence
 
     if hasStep2References {
         print("\n2.1: SPEAKER TOKEN GENERATION")

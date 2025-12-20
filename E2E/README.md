@@ -9,7 +9,7 @@ The verification compares intermediate outputs at each stage of the TTS pipeline
 | Stage | Description | Swift Status | Tolerance |
 |-------|-------------|--------------|-----------|
 | 1 | Text Tokenization | ✅ Verified | Exact match |
-| 2 | T3 Conditioning | ✅ Verified | diff < 5e-6 |
+| 2 | T3 Conditioning | ✅ Verified | diff < 3e-6 |
 | 3 | T3 Token Generation | ✅ Verified | Exact match (greedy) |
 | 4 | S3Gen Embedding | ✅ Reference | Python reference |
 | 5 | S3Gen Input Prep | ⏸️ Framework ready | diff < 0.01 |
