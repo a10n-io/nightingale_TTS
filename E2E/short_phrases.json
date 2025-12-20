@@ -1,0 +1,152 @@
+[
+  {
+    "id": 1,
+    "text": "Hi.",
+    "voice": "samantha",
+    "description": "Single word, extremely short duration."
+  },
+  {
+    "id": 2,
+    "text": "Hello world.",
+    "voice": "sujano",
+    "description": "The specific example cited in the bug report."
+  },
+  {
+    "id": 3,
+    "text": "No.",
+    "voice": "samantha",
+    "description": "Single negative, high risk of silence padding or repetition."
+  },
+  {
+    "id": 4,
+    "text": "Yes, okay.",
+    "voice": "sujano",
+    "description": "Common short affirmation."
+  },
+  {
+    "id": 5,
+    "text": "What?",
+    "voice": "samantha",
+    "description": "Short question ending with a rising inflection."
+  },
+  {
+    "id": 6,
+    "text": "Hmm...",
+    "voice": "sujano",
+    "description": "Non-verbal sound, often triggers hallucination in alignment."
+  },
+  {
+    "id": 7,
+    "text": "One, two, three.",
+    "voice": "samantha",
+    "description": "Sequential counting."
+  },
+  {
+    "id": 8,
+    "text": "Stop it.",
+    "voice": "sujano",
+    "description": "Short imperative command."
+  },
+  {
+    "id": 9,
+    "text": "I see.",
+    "voice": "samantha",
+    "description": "Very common conversational filler."
+  },
+  {
+    "id": 10,
+    "text": "Who is there?",
+    "voice": "sujano",
+    "description": "Short question."
+  },
+  {
+    "id": 11,
+    "text": "Thanks.",
+    "voice": "samantha",
+    "description": "Common single-word closing."
+  },
+  {
+    "id": 12,
+    "text": "Oh really?",
+    "voice": "sujano",
+    "description": "Interjection."
+  },
+  {
+    "id": 13,
+    "text": "Good morning.",
+    "voice": "samantha",
+    "description": "Standard greeting, slightly longer but still < 15 tokens."
+  },
+  {
+    "id": 14,
+    "text": "Bye bye.",
+    "voice": "sujano",
+    "description": "Repetitive word structure."
+  },
+  {
+    "id": 15,
+    "text": "Testing.",
+    "voice": "samantha",
+    "description": "Single word."
+  },
+  {
+    "id": 16,
+    "text": "12:30 PM.",
+    "voice": "sujano",
+    "description": "Numbers and symbols, often tricky for tokenization/alignment."
+  },
+  {
+    "id": 17,
+    "text": "Maybe later.",
+    "voice": "samantha",
+    "description": "Short phrase."
+  },
+  {
+    "id": 18,
+    "text": "Ha ha ha.",
+    "voice": "sujano",
+    "description": "Laughter/repetition; high risk of looping."
+  },
+  {
+    "id": 19,
+    "text": "Wait!",
+    "voice": "samantha",
+    "description": "Exclamation."
+  },
+  {
+    "id": 20,
+    "text": "I don't know.",
+    "voice": "sujano",
+    "description": "Contraction."
+  },
+  {
+    "id": 21,
+    "text": "Wow.",
+    "voice": "samantha",
+    "description": "Single emotional interjection."
+  },
+  {
+    "id": 22,
+    "text": "Is it true?",
+    "voice": "sujano",
+    "description": "Short question."
+  },
+  {
+    "id": 23,
+    "text": "Please.",
+    "voice": "samantha",
+    "description": "Polite single word."
+  },
+  {
+    "id": 24,
+    "text": "Go.",
+    "voice": "sujano",
+    "description": "Shortest possible command."
+  },
+  {
+    "id": 25,
+    "text": "The end.",
+    "voice": "samantha",
+    "description": "Short phrase indicating closure."
+  }
+]
