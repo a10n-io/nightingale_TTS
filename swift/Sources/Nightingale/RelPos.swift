@@ -253,58 +253,53 @@ public class RelPositionMultiHeadAttention: Module {
     }
 
     /// Load weights for relative position attention
+    /// NOTE: All weights MUST be transposed from PyTorch [out, in] to MLX [in, out]
     public func load(weights: [String: MLXArray], prefix: String) {
-        // Load Q, K, V projections
+        // Load Q, K, V projections (MUST transpose)
         if let w = weights["\(prefix).linear_q.weight"] {
-            queryProj.update(parameters: ModuleParameters.unflattened(["weight": w]))
+            queryProj.weight = w.T
         }
         if let b = weights["\(prefix).linear_q.bias"] {
-            queryProj.update(parameters: ModuleParameters.unflattened(["bias": b]))
+            queryProj.bias = b
         }
         if let w = weights["\(prefix).linear_k.weight"] {
-            keyProj.update(parameters: ModuleParameters.unflattened(["weight": w]))
+            keyProj.weight = w.T
         }
         if let b = weights["\(prefix).linear_k.bias"] {
-            keyProj.update(parameters: ModuleParameters.unflattened(["bias": b]))
+            keyProj.bias = b
         }
         if let w = weights["\(prefix).linear_v.weight"] {
-            valueProj.update(parameters: ModuleParameters.unflattened(["weight": w]))
+            valueProj.weight = w.T
         }
         if let b = weights["\(prefix).linear_v.bias"] {
-            valueProj.update(parameters: ModuleParameters.unflattened(["bias": b]))
+            valueProj.bias = b
         }
 
-        // Load output projection
+        // Load output projection (MUST transpose)
         if let w = weights["\(prefix).linear_out.weight"] {
-            outProj.update(parameters: ModuleParameters.unflattened(["weight": w]))
+            outProj.weight = w.T
         }
         if let b = weights["\(prefix).linear_out.bias"] {
-            outProj.update(parameters: ModuleParameters.unflattened(["bias": b]))
+            outProj.bias = b
         }
 
-        // Load positional projection (no bias)
+        // Load positional projection (no bias) (MUST transpose)
         if let w = weights["\(prefix).linear_pos.weight"] {
             eval(w)
             let expectedShape = [dModel, dModel]
 
             // 🚨 CRITICAL: Guard against shape mismatches BEFORE update
-            // MLX Linear.update() silently accepts wrong shapes and resizes the layer!
             if w.shape[0] != expectedShape[0] || w.shape[1] != expectedShape[1] {
                 print("🚨🚨🚨 CAUGHT THE BUG!")
                 print("   Trying to load weight with shape \(w.shape) into linearPos")
                 print("   Expected: [\(dModel), \(dModel)] = [512, 512]")
                 print("   Got: \(w.shape)")
-                print("   Key: \(prefix).linear_pos.weight")
-                print("   This would silently resize Linear(512,512) → Linear(\(w.shape[0]),\(w.shape[1]))!")
-                print("   Result: posEmb [1,564,512] @ weight[\(w.shape[0]),\(w.shape[1])] = pProj [1,564,\(w.shape[1])]")
-                print("   Then pProj[1,564,\(w.shape[1])] tries to reshape to [1,564,\(numHeads),\(dHead)] → CRASH!")
-                print("   dModel=\(dModel), numHeads=\(numHeads), dHead=\(dHead)")
                 fflush(stdout)
-                fatalError("❌ STOP! linear_pos.weight has WRONG SHAPE - check weight key mapping!")
+                fatalError("❌ STOP! linear_pos.weight has WRONG SHAPE!")
             }
 
-            linearPos.update(parameters: ModuleParameters.unflattened(["weight": w]))
-            print("✅ Loaded \(prefix).linear_pos.weight: \(w.shape)")
+            linearPos.weight = w.T
+            print("✅ Loaded \(prefix).linear_pos.weight: \(w.shape) -> transposed")
             fflush(stdout)
         } else {
             print("⚠️  \(prefix).linear_pos.weight not found in weights dict")

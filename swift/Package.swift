@@ -36,10 +36,15 @@ let package = Package(
             name: "LiveFireTest",
             targets: ["LiveFireTest"]
         ),
+        .executable(
+            name: "VerifyLive",
+            targets: ["VerifyLive"]
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.21.0"),
         .package(url: "https://github.com/huggingface/swift-transformers", from: "0.1.14"),
+        .package(url: "https://github.com/apple/swift-argument-parser", from: "1.2.0"),
     ],
     targets: [
         .target(
@@ -82,6 +87,14 @@ let package = Package(
             name: "LiveFireTest",
             dependencies: ["Nightingale"],
             path: "test_scripts/LiveFireTest"
+        ),
+        .executableTarget(
+            name: "VerifyLive",
+            dependencies: [
+                "Nightingale",
+                .product(name: "ArgumentParser", package: "swift-argument-parser")
+            ],
+            path: "test_scripts/VerifyLive"
         ),
     ]
 )

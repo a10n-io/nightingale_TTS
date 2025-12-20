@@ -358,17 +358,38 @@ public class S3ConformerFeedForward: Module {
 
     /// Load weights for feed forward
     public func load(weights: [String: MLXArray], prefix: String) {
-        if let w = weights["\(prefix).w_1.weight"] {
-            w1.update(parameters: ModuleParameters.unflattened(["weight": w]))
+        // PyTorch weights are [out_features, in_features]
+        // FixedLinear expects [in_features, out_features] for matmul(x, weight)
+        // Need to transpose!
+        print("🔧 FF.load: Loading \(prefix)")
+        let w1Key = "\(prefix).w_1.weight"
+        print("🔧   Looking for key: '\(w1Key)'")
+        let matchingKeys = weights.keys.filter { $0.contains("feed_forward") && $0.contains("w_1") }
+        if matchingKeys.count > 0 {
+            print("🔧   Matching keys found: \(matchingKeys.prefix(5))")
+        } else {
+            print("🔧   ❌ No matching keys found!")
+        }
+        if let w = weights[w1Key] {
+            print("🔧   w_1 FROM FILE: \(w.shape)")
+            // Try .T property for transpose (matrix transpose)
+            let wTransposed = w.T
+            print("🔧   w_1 TRANSPOSED (using .T): \(wTransposed.shape)")
+            w1.weight = wTransposed
+            print("🔧   w_1.weight AFTER: \(w1.weight.shape)")
         }
         if let b = weights["\(prefix).w_1.bias"] {
-            w1.update(parameters: ModuleParameters.unflattened(["bias": b]))
+            w1.bias = b
         }
         if let w = weights["\(prefix).w_2.weight"] {
-            w2.update(parameters: ModuleParameters.unflattened(["weight": w]))
+            print("🔧   w_2 FROM FILE: \(w.shape)")
+            let wTransposed = w.T
+            print("🔧   w_2 TRANSPOSED (using .T): \(wTransposed.shape)")
+            w2.weight = wTransposed
+            print("🔧   w_2.weight AFTER: \(w2.weight.shape)")
         }
         if let b = weights["\(prefix).w_2.bias"] {
-            w2.update(parameters: ModuleParameters.unflattened(["bias": b]))
+            w2.bias = b
         }
     }
 }
@@ -808,13 +829,14 @@ public class UpsampleEncoder: Module {
     public func load(weights: [String: MLXArray], prefix: String = "encoder") {
         print("UpsampleEncoder: Loading weights with prefix '\(prefix)'")
 
-        // 1. Load embed.linear weights
+        // 1. Load embed.linear weights (MUST transpose PyTorch [out, in] -> MLX [in, out])
         if let w = weights["\(prefix).embed.linear.weight"] {
-            embedLinear.update(parameters: ModuleParameters.unflattened(["weight": w]))
-            print("  ✅ Loaded embed.linear.weight")
+            print("  📊 embed.linear.weight FROM FILE: \(w.shape)")
+            embedLinear.weight = w.T
+            print("  ✅ Loaded embed.linear.weight (transposed to \(embedLinear.weight.shape))")
         }
         if let b = weights["\(prefix).embed.linear.bias"] {
-            embedLinear.update(parameters: ModuleParameters.unflattened(["bias": b]))
+            embedLinear.bias = b
             print("  ✅ Loaded embed.linear.bias")
         }
 
@@ -873,13 +895,14 @@ public class UpsampleEncoder: Module {
             print("  ✅ Loaded up_layer.conv.bias")
         }
 
-        // 7. Load up_embed weights
+        // 7. Load up_embed weights (MUST transpose PyTorch [out, in] -> MLX [in, out])
         if let w = weights["\(prefix).up_embed.linear.weight"] {
-            upEmbedLinear.update(parameters: ModuleParameters.unflattened(["weight": w]))
-            print("  ✅ Loaded up_embed.linear.weight")
+            print("  📊 up_embed.linear.weight FROM FILE: \(w.shape)")
+            upEmbedLinear.weight = w.T
+            print("  ✅ Loaded up_embed.linear.weight (transposed to \(upEmbedLinear.weight.shape))")
         }
         if let b = weights["\(prefix).up_embed.linear.bias"] {
-            upEmbedLinear.update(parameters: ModuleParameters.unflattened(["bias": b]))
+            upEmbedLinear.bias = b
             print("  ✅ Loaded up_embed.linear.bias")
         }
         if let w = weights["\(prefix).up_embed.norm.weight"] {

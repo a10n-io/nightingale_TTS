@@ -42,7 +42,14 @@ public enum LinearFactory {
             print("  [FP16-DQ] Loading dequantized from Q4: \(name)")
 
             // Dequantize: reconstruct FP16 weights from Q4
-            let dequantized = dequantizeQ4(packed: packedWeight, scales: scales, biases: biases, groupSize: 64, bits: 4)
+            var dequantized = dequantizeQ4(packed: packedWeight, scales: scales, biases: biases, groupSize: 64, bits: 4)
+
+            // MLX Linear expects weights shaped [in_features, out_features]
+            // Dequantized weights are in PyTorch format [out_features, in_features]
+            if dequantized.shape[0] == outputDim && dequantized.shape[1] == inputDim {
+                dequantized = dequantized.transposed(0, 1)
+                print("  [FP16-DQ] Transposed: \(name) to \(dequantized.shape)")
+            }
 
             let linear = Linear(inputDim, outputDim, bias: bias)
             var params: [String: MLXArray] = ["weight": dequantized]
@@ -91,9 +98,19 @@ public enum LinearFactory {
         let linear = Linear(inputDim, outputDim, bias: bias)
 
         if let w = weights[weightKey] {
-            print("  [FP16] Loading standard: \(name) - dtype: \(w.dtype)")
+            // MLX Linear expects weights shaped [in_features, out_features]
+            // PyTorch saves them as [out_features, in_features]
+            // Need to transpose if shape doesn't match expected [inputDim, outputDim]
+            var weightToUse = w
+            if w.shape[0] == outputDim && w.shape[1] == inputDim {
+                // Weight is in PyTorch format [out, in], transpose to MLX format [in, out]
+                weightToUse = w.transposed(0, 1)
+                print("  [FP16] Loading transposed: \(name) - \(w.shape) -> \(weightToUse.shape)")
+            } else {
+                print("  [FP16] Loading standard: \(name) - dtype: \(w.dtype), shape: \(w.shape)")
+            }
             // Use update(parameters:) - MLX properties are immutable 'let' constants
-            var params: [String: MLXArray] = ["weight": w]
+            var params: [String: MLXArray] = ["weight": weightToUse]
             if bias, let b = weights["\(name).bias"] {
                 params["bias"] = b
             }
