@@ -1,11 +1,5 @@
 [
   {
-    "id": "basic_greeting",
-    "description": "Short / Baseline",
-    "text_en": "Hello world.",
-    "text_nl": "Hallo wereld."
-  },
-  {
     "id": "expressive_surprise",
     "description": "Expressiveness / Emotion",
     "text_en": "Wow! I absolutely cannot believe that it worked on the first try!",

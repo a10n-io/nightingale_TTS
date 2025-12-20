@@ -1,9 +1,0 @@
-{
-  "voice": "sujano",
-  "sentence_id": "basic_greeting",
-  "text": "Hallo wereld.",
-  "language": "nl",
-  "seed": 42,
-  "temperature": 0.001,
-  "device": "mps"
-}

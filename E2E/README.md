@@ -9,8 +9,8 @@ The verification compares intermediate outputs at each stage of the TTS pipeline
 | Stage | Description | Swift Status | Tolerance |
 |-------|-------------|--------------|-----------|
 | 1 | Text Tokenization | ✅ Verified | Exact match |
-| 2 | T3 Conditioning | ✅ Verified | diff < 0.001 |
-| 3 | T3 Token Generation | ✅ Reference | Python reference |
+| 2 | T3 Conditioning | ✅ Verified | diff < 1e-6 |
+| 3 | T3 Token Generation | ✅ Verified | Exact match (greedy) |
 | 4 | S3Gen Embedding | ✅ Reference | Python reference |
 | 5 | S3Gen Input Prep | ⏸️ Framework ready | diff < 0.01 |
 | 6 | S3Gen Encoder | ⚠️ Known issue | See notes |
@@ -27,15 +27,18 @@ This affects full numerical verification for stages 5-8. The framework is comple
 
 ## Quick Start
 
-**Important:** Run from project root using the venv python, or use the scripts directly:
+**Important:** Run from project root using the venv python, or use the script directly:
 
 ```bash
 # From project root - using venv python explicitly
 cd /Users/a10n/Projects/nightingale_TTS
 python/venv/bin/python E2E/verify_e2e.py
 
-# Or run directly (scripts have correct shebang)
+# Or run directly (script has correct shebang)
 ./E2E/verify_e2e.py
+
+# Test only Steps 1-3 (tokenization, conditioning, generation)
+./E2E/verify_e2e.py --steps 3
 
 # Test only Step 1 (tokenization) - fastest verification
 ./E2E/verify_e2e.py --steps 1
@@ -52,29 +55,27 @@ python/venv/bin/python E2E/verify_e2e.py
 ./E2E/verify_e2e.py --swift-only
 
 # Filter to specific test case
-./E2E/verify_e2e.py --voice samantha --sentence basic_greeting --lang en
+./E2E/verify_e2e.py --voice samantha --sentence expressive_surprise --lang en
 
-# Skip Python generation entirely
+# Generate Python references only (no Swift verification)
 ./E2E/verify_e2e.py --no-swift
 ```
 
 **Do NOT use system python3** - it won't have the chatterbox package installed.
 
-## Scripts
-
-### verify_e2e.py (Main Script)
+## verify_e2e.py
 
 Unified verification script that:
 1. Generates Python reference outputs (unless `--swift-only`)
-2. Runs Swift VerifyLive binary for comparison
+2. Runs Swift VerifyLive for comparison
 3. Reports stage-by-stage verification results
 
 **Arguments:**
 - `--voice`, `-v`: Filter to specific voice (samantha, sujano)
 - `--sentence`, `-s`: Filter to specific sentence ID
 - `--lang`, `-l`: Filter to specific language (en, nl for standard tests; ar, zh, da, nl, en, fi, fr, de, el, he, hi, it, ja, ko, ms, no, pl, pt, ru, es, sv, sw, tr for linguistic tests)
-- `--device`, `-d`: PyTorch device (cpu, mps, cuda)
-- `--steps`: Max step to generate/verify (1-8). Default: 5. Use `--steps 1` for fast tokenization-only testing
+- `--device`, `-d`: PyTorch device (cpu, mps, cuda). Use `cpu` for deterministic results.
+- `--steps`: Max step to generate/verify (1-8). Default: 5. Use `--steps 3` for steps 1-3.
 - `--linguistic`: Use Unicode linguistic test file (22 languages, 132 test cases) instead of standard tests (2 languages, 20 test cases)
 - `--swift-only`: Skip Python generation, use existing references
 - `--no-swift`: Skip Swift verification, only generate Python refs
@@ -90,54 +91,38 @@ Temperature: 0.001
 Swift verification: enabled
 
 --------------------------------------------------------------------------------
-[1/20] Voice: samantha | Sentence: basic_greeting | Lang: en
-  Text: "Hello world."
+[1/16] Voice: samantha | Sentence: expressive_surprise | Lang: en
+  Text: "Wow! I absolutely cannot believe that it worked on the first try!"
 
   Running Swift verification...
   Stage 1: Text Tokenization — ✅ VERIFIED (Diff: 0.00e+00)
     Notes: BPE tokenizer - 8 tokens - Swift MATCH
-  Stage 2: T3 Conditioning — ✅ VERIFIED (Diff: 2.26e-06)
+  Stage 2: T3 Conditioning — ✅ VERIFIED (Diff: 2.26e-07)
     Notes: emotion_adv=0.500, shape (1, 34, 1024)
   Stage 3: T3 Token Generation — ✅ VERIFIED (Diff: 0.00e+00)
-    Notes: Generated 32 speech tokens (Python)
-  Stage 4: S3Gen Embedding — ✅ VERIFIED (Diff: 0.00e+00)
-    Notes: Voice embedding shape (1, 192) (Python)
+    Notes: 32 tokens - Swift PASS
 
 ================================================================================
 VERIFICATION SUMMARY
 ================================================================================
 ✅ ALL TESTS PASSED
-Total test cases: 20
-```
-
-### run_python_e2e.py
-
-Standalone Python reference generator. Generates reference outputs for all 8 stages.
-
-```bash
-# Run directly (uses venv shebang)
-./E2E/run_python_e2e.py
-./E2E/run_python_e2e.py --voice samantha --sentence basic_greeting
-
-# Or with explicit venv python
-python/venv/bin/python E2E/run_python_e2e.py
+Total test cases: 16
 ```
 
 ## Test Data
 
 ### test_sentences.json (Standard Test Set)
 
-Contains 5 test sentences in English and Dutch:
+Contains 4 test sentences in English and Dutch:
 
 | ID | Description | Purpose |
 |----|-------------|---------|
-| basic_greeting | Short / Baseline | Basic tokenization |
 | expressive_surprise | Expressiveness / Emotion | Emotion handling |
 | narrative_flow | Length / Pacing | Long-form generation |
 | interrogative | Intonation / Question | Question intonation |
 | technical_status | Technical / Articulation | Technical vocabulary |
 
-**Test matrix:** 2 voices × 5 sentences × 2 languages = **20 test cases**
+**Test matrix:** 2 voices × 4 sentences × 2 languages = **16 test cases**
 
 ### test_sentences_unicode_linguistic.json (Linguistic Unicode Test Set)
 
@@ -196,30 +181,19 @@ Both voices must have `emotion_adv.npy` exported (not hardcoded 0.5).
 E2E/
 ├── README.md                              # This file
 ├── verify_e2e.py                          # Main verification script
-├── run_python_e2e.py                      # Python reference generator
-├── test_sentences.json                    # Standard test sentences (en/nl, 20 tests)
+├── check_weight_keys.py                   # Weight key debugging utility
+├── test_sentences.json                    # Standard test sentences (en/nl, 16 tests)
 ├── test_sentences_unicode_linguistic.json # Linguistic Unicode tests (22 languages, 132 tests)
 └── reference_outputs/                     # Generated Python references
     ├── samantha/
-    │   ├── basic_greeting_en/
+    │   ├── expressive_surprise_en/
     │   │   ├── config.json
     │   │   ├── step1_text_tokens.npy
+    │   │   ├── step1_text_tokens_cfg.npy
     │   │   ├── step2_final_cond.npy
     │   │   ├── step2_emotion_value.npy
     │   │   ├── step3_speech_tokens.npy
-    │   │   ├── step4_embedding.npy
-    │   │   ├── step4_prompt_token.npy
-    │   │   ├── step4_prompt_feat.npy
-    │   │   ├── step5_full_tokens.npy
-    │   │   ├── step5_token_emb.npy
-    │   │   ├── step5_spk_emb.npy
-    │   │   ├── step6_encoder_out.npy
-    │   │   ├── step6_mu.npy
-    │   │   ├── step6_x_cond.npy
-    │   │   ├── step7_mel.npy
-    │   │   ├── step7_initial_noise.npy
-    │   │   ├── step7_mel_trimmed.npy
-    │   │   └── step8_audio.npy
+    │   │   └── ...
     │   └── ...
     └── sujano/
         └── ...
@@ -236,40 +210,39 @@ cd swift/test_scripts/VerifyLive
 swift build
 ```
 
-### Running
+### Running Manually
+
+The `verify_e2e.py` script calls Swift automatically, but you can also run it manually:
 
 ```bash
-# Basic usage
-.build/debug/VerifyLive --voice samantha --ref-dir /path/to/reference_outputs/samantha/basic_greeting_en
-
-# Help
-.build/debug/VerifyLive --help
+cd swift/test_scripts/VerifyLive
+swift run VerifyLive --voice samantha --ref-dir ../../../E2E/reference_outputs/samantha/expressive_surprise_en
 ```
 
 ### Current Status
 
 | Stage | Swift Implementation | Notes |
 |-------|---------------------|-------|
-| 1-2 | Full numerical verification | Matches Python exactly |
+| 1-3 | Full numerical verification | Exact match required |
 | 5-8 | Framework complete | S3Gen skipped due to encoder bug |
-
-The verification framework for stages 5-8 is complete but currently runs in "reference validation" mode (checks files exist) until the encoder bug is fixed.
 
 ## Determinism Settings
 
 For reproducible results:
 - **Seed**: 42 (set for torch, numpy, random)
-- **Temperature**: 0.001 (near-deterministic, 0.0 causes NaN)
+- **Temperature**: 0.001 (triggers greedy/argmax decoding)
 - **CFG Weight**: 0.5
 - **Repetition Penalty**: 2.0
 - **n_timesteps**: 10 (ODE solver steps)
 - **cfg_rate**: 0.7 (classifier-free guidance rate)
 
+**Note:** With temperature <= 0.01, both Python and Swift use greedy decoding (argmax) instead of multinomial sampling, ensuring deterministic token generation.
+
 ## Prerequisites
 
 ### 1. Python Virtual Environment (Required)
 
-The scripts require a Python virtual environment with the `chatterbox` package and dependencies.
+The script requires a Python virtual environment with the `chatterbox` package and dependencies.
 
 **First-time setup:**
 ```bash
@@ -300,12 +273,12 @@ which python
 python -c "from chatterbox.mtl_tts import ChatterboxMultilingualTTS; print('OK')"
 ```
 
-**Important:** The E2E scripts have a shebang pointing to the venv python:
+**Important:** The E2E script has a shebang pointing to the venv python:
 ```
 #!/Users/a10n/Projects/nightingale_TTS/python/venv/bin/python
 ```
 
-This means you can run them directly (`./E2E/verify_e2e.py`) without activating the venv first.
+This means you can run it directly (`./E2E/verify_e2e.py`) without activating the venv first.
 
 **Do NOT use system python3** - it won't have chatterbox installed:
 ```bash
@@ -324,11 +297,9 @@ python/venv/bin/python E2E/verify_e2e.py
 The Chatterbox model files must be present:
 ```
 models/chatterbox/
-├── t3_23lang.safetensors      # T3 model weights
-├── s3gen.safetensors          # S3Gen model weights
-├── vocoder.safetensors        # Vocoder weights
-├── vocab.txt                  # BPE vocabulary
-├── merges.txt                 # BPE merges
+├── t3_mtl23ls_v2.safetensors  # T3 model weights
+├── s3gen.pt                    # S3Gen model weights
+├── grapheme_mtl_merged_expanded_v1.json  # Tokenizer
 └── ...
 ```
 
@@ -340,8 +311,6 @@ These are downloaded automatically by `ChatterboxMultilingualTTS.from_pretrained
 cd /Users/a10n/Projects/nightingale_TTS/swift/test_scripts/VerifyLive
 swift build
 ```
-
-The binary will be at `.build/debug/VerifyLive`.
 
 ### 4. Baked Voice Files (Required)
 
@@ -362,19 +331,11 @@ python python/bake_voice.py --voice samantha
 python python/convert_voice_to_npy_padded.py --voice samantha
 ```
 
-**Current voices:**
-- `samantha` - Female English voice
-- `sujano` - Male Dutch voice
-
 ## Troubleshooting
 
 ### "No module named 'chatterbox'" or ImportError
 You're using the wrong Python. Use the venv:
 ```bash
-# Check which python you're using
-which python3
-# If it shows /usr/bin/python3 or similar, you need the venv
-
 # Option 1: Run directly (uses shebang)
 ./E2E/verify_e2e.py
 
@@ -386,10 +347,8 @@ source python/venv/bin/activate
 python E2E/verify_e2e.py
 ```
 
-### "FileNotFoundError: t3_23lang.safetensors"
-Model files are missing. Either:
-1. Download via `ChatterboxMultilingualTTS.from_pretrained()` first
-2. Or manually place model files in `models/chatterbox/`
+### "RuntimeError: Attempting to deserialize object on a CUDA device"
+The model was saved on CUDA but you're loading on CPU. This is fixed in the code with `map_location=device`.
 
 ### Swift binary not found
 Build the Swift verification tool:
@@ -398,30 +357,16 @@ cd swift/test_scripts/VerifyLive
 swift build
 ```
 
-### emotion_adv mismatch
-Re-export the voice with emotion_adv:
-```bash
-source python/venv/bin/activate
-python python/convert_voice_to_npy_padded.py --voice <voice_name>
-```
-
-### Temperature 0.0 causes NaN
-This is expected. Use temperature=0.001 for near-deterministic behavior.
-
-### Token count mismatch
-Ensure the tokenizer vocab and merges files match between Python and Swift.
+### Step 3 tokens don't match
+With temperature=0.001, both implementations use greedy decoding and tokens MUST match exactly. Any mismatch indicates a bug in the T3 model implementation. Check:
+1. Text tokenization matches (Step 1)
+2. Conditioning matches (Step 2)
+3. Model weights are identical
 
 ### "Permission denied" when running ./E2E/verify_e2e.py
 Make the script executable:
 ```bash
-chmod +x E2E/verify_e2e.py E2E/run_python_e2e.py
-```
-
-### Swift encoder shape mismatch
-The Swift UpsampleEncoder has a known bug in attention layers. The verification framework skips S3Gen model loading until this is fixed. To enable (for debugging):
-```swift
-// In VerifyLive/main.swift
-let skipS3Gen = false  // Change from true to false
+chmod +x E2E/verify_e2e.py
 ```
 
 ## Adding New Test Cases
@@ -461,8 +406,6 @@ let skipS3Gen = false  // Change from true to false
 ./E2E/verify_e2e.py --steps 1 --linguistic --lang vi
 ```
 
-**Note:** Each language entry should have 3 text variants (`text_XX_1`, `text_XX_2`, `text_XX_3`) where XX is the 2-letter language code. The ID format should be `{lang}_complex`.
-
 ## Adding New Voices
 
 1. Create voice directory with reference audio:
@@ -480,7 +423,7 @@ python python/bake_voice.py --voice new_voice
 python python/convert_voice_to_npy_padded.py --voice new_voice
 ```
 
-3. Add voice to test matrix in `verify_e2e.py` and `run_python_e2e.py`:
+3. Add voice to test matrix in `verify_e2e.py`:
 ```python
 voices = ["samantha", "sujano", "new_voice"]
 ```

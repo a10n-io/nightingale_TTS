@@ -10,7 +10,7 @@ import ArgumentParser
 let PROJECT_ROOT = "/Users/a10n/Projects/nightingale_TTS"
 let MODELS_PATH = "\(PROJECT_ROOT)/models/mlx"
 let VOICES_PATH = "\(PROJECT_ROOT)/baked_voices"
-let DEFAULT_VERIFY_PATH = "\(PROJECT_ROOT)/E2E/reference_outputs/samantha/basic_greeting_en"
+let DEFAULT_VERIFY_PATH = "\(PROJECT_ROOT)/E2E/reference_outputs/samantha/expressive_surprise_en"
 
 // MARK: - NPY Loader
 
@@ -919,7 +919,7 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
     let step2RefPath = verifyURL.appendingPathComponent("step2_speaker_token.npy")
     let hasStep2References = FileManager.default.fileExists(atPath: step2RefPath.path)
     var step2Pass = false  // Default to false, will be set to true if verification passes
-    let step2Threshold: Float = 5e-6  // Relaxed threshold to accept PyTorch/MLX framework differences (Perceiver: 2.26e-06)
+    let step2Threshold: Float = 1e-6  // Strict threshold for E2E verification parity
 
     if hasStep2References {
         print("\n2.1: SPEAKER TOKEN GENERATION")
@@ -1114,20 +1114,30 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
         print("  Swift:  \(Array(swiftFiltered.prefix(20)))")
         print("  Python: \(Array(refArray.prefix(20)))")
 
-        // Check for exact match or prefix match (Swift may generate slightly more before EOS)
+        // STRICT: Require exact match for E2E verification parity
+        // With greedy decoding (temp <= 0.01), tokens MUST match exactly
         let exactMatch = swiftFiltered.count == refArray.count && matchCount == totalTokens
-        let prefixMatch = swiftFiltered.count >= refArray.count &&
-                          Array(swiftFiltered.prefix(refArray.count)) == refArray
 
-        step3Pass = exactMatch || prefixMatch
+        step3Pass = exactMatch
 
         if exactMatch {
             print("\nStep 3 (T3 Generation): ✅ PASSED (exact match)")
-        } else if prefixMatch {
-            print("\nStep 3 (T3 Generation): ✅ PASSED (prefix match - Swift generated \(swiftFiltered.count - refArray.count) extra tokens before EOS)")
         } else {
-            print("\nStep 3 (T3 Generation): ⚠️  PARTIAL (tokens differ - expected due to sampling)")
-            print("  Note: With temperature=\(String(format: "%.3f", step3Temperature)), some variation is expected")
+            print("\nStep 3 (T3 Generation): ❌ FAILED (tokens differ)")
+            print("  Swift count: \(swiftFiltered.count), Python count: \(refArray.count)")
+            print("  Matching: \(matchCount)/\(totalTokens) (\(String(format: "%.1f", matchPercent))%)")
+
+            // Find first divergence point
+            for (i, (s, p)) in zip(swiftFiltered, refArray).enumerated() {
+                if s != p {
+                    print("  First divergence at index \(i): Swift=\(s), Python=\(p)")
+                    break
+                }
+            }
+
+            // With greedy decoding, any difference indicates a bug
+            print("\n  ⚠️  With temperature=\(String(format: "%.3f", step3Temperature)) (greedy), tokens MUST match exactly.")
+            print("  This indicates a divergence in the T3 model implementation.")
         }
     } else {
         print("\n[Step 3: T3 Generation verification SKIPPED (no references found)]")
@@ -1858,7 +1868,7 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
         print("Step 2 (Conditioning): ⏭️  SKIPPED (no reference files)")
     }
     if hasStep3References {
-        print("Step 3 (T3 Generation): \(step3Pass ? "✅ PASSED (exact match)" : "⚠️  PARTIAL (sampling variation)")")
+        print("Step 3 (T3 Generation): \(step3Pass ? "✅ PASSED (exact match)" : "❌ FAILED (tokens differ)")")
     } else {
         print("Step 3 (T3 Generation): ⏭️  SKIPPED (no reference files)")
     }
@@ -1877,10 +1887,10 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
     if hasStep2References {
         allPass = allPass && step2Pass
     }
-    // Note: Step 3 uses sampling, so we don't require exact match for overall pass
-    // if hasStep3References {
-    //     allPass = allPass && step3Pass
-    // }
+    // Step 3 now uses greedy decoding (temp <= 0.01), so exact match is required
+    if hasStep3References {
+        allPass = allPass && step3Pass
+    }
     if hasS3GenReferences {
         allPass = allPass && step5Pass && step6Pass && step7aPass && step7Pass && step8Pass
     }
