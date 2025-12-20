@@ -26,6 +26,7 @@ import random
 import json
 import sys
 import subprocess
+import time
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional, List, Tuple
@@ -806,6 +807,8 @@ def main():
 
     run_swift = not args.no_swift
 
+    start_time = time.time()
+
     print("=" * 80)
     print("E2E VERIFICATION: Python/PyTorch vs Swift/MLX")
     print("=" * 80)
@@ -881,6 +884,11 @@ def main():
             sys.exit(1)
 
     # Print comprehensive summary
+    elapsed_time = time.time() - start_time
+    minutes = int(elapsed_time // 60)
+    seconds = elapsed_time % 60
+    print(f"Total time: {minutes}m {seconds:.1f}s")
+    print()
     print_comprehensive_summary(all_results, run_swift)
 
 
