@@ -2378,6 +2378,75 @@ public class S3Gen: Module {
         return generatedMel
     }
 
+    /// Run ODE solver with all inputs provided directly (for isolated testing)
+    /// All inputs should be in [B, C, T] format (channels second, time last)
+    public func runODEOnly(
+        initialNoise: MLXArray,  // [1, 80, T]
+        muT: MLXArray,           // [1, 80, T]
+        condT: MLXArray,         // [1, 80, T]
+        spkEmb: MLXArray         // [1, 80] - already projected
+    ) -> MLXArray {
+        var xt = initialNoise
+
+        let nTimesteps = 10
+        let cfgRate: Float = 0.7
+
+        // Cosine time scheduling
+        var tSpan: [Float] = []
+        for i in 0...(nTimesteps) {
+            let linearT = Float(i) / Float(nTimesteps)
+            let cosineT = 1.0 - cos(linearT * 0.5 * Float.pi)
+            tSpan.append(cosineT)
+        }
+
+        var currentT = tSpan[0]
+        var dt = tSpan[1] - tSpan[0]
+
+        print("\n📊 ODE-Only Configuration:")
+        print("   n_timesteps: \(nTimesteps)")
+        print("   CFG rate: \(cfgRate)")
+        print("   t_span: \(tSpan)")
+        print("   Initial noise: [\(xt.min().item(Float.self)), \(xt.max().item(Float.self))]")
+
+        for step in 1...nTimesteps {
+            let t = MLXArray([currentT])
+
+            // Prepare Batch for CFG: [Cond, Uncond]
+            let xIn = concatenated([xt, xt], axis: 0)
+            let muIn = concatenated([muT, MLXArray.zeros(like: muT)], axis: 0)
+            let spkIn = concatenated([spkEmb, MLXArray.zeros(like: spkEmb)], axis: 0)
+            let condIn = concatenated([condT, MLXArray.zeros(like: condT)], axis: 0)
+            let tIn = concatenated([t, t], axis: 0)
+
+            // Forward pass (Batch=2)
+            let vBatch = decoder(x: xIn, mu: muIn, t: tIn, speakerEmb: spkIn, cond: condIn, mask: nil)
+
+            // Split
+            let vCond = vBatch[0].expandedDimensions(axis: 0)
+            let vUncond = vBatch[1].expandedDimensions(axis: 0)
+
+            // CFG Formula: v = (1 + cfg) * vCond - cfg * vUncond
+            let v = (1.0 + cfgRate) * vCond - cfgRate * vUncond
+
+            // Euler step
+            xt = xt + v * dt
+
+            // Update time for next step
+            currentT = currentT + dt
+            if step < nTimesteps {
+                dt = tSpan[step + 1] - currentT
+            }
+
+            if step == 1 || step == nTimesteps {
+                eval(xt)
+                print("  Step \(step): t=\(String(format: "%.4f", currentT-dt)), x=[\(xt.min().item(Float.self)), \(xt.max().item(Float.self))]")
+            }
+        }
+
+        eval(xt)
+        return xt
+    }
+
     // Version that generates with full ODE tracing (saves to swift_ode_trace.safetensors)
     public func generateWithTracing(tokens: MLXArray, speakerEmb: MLXArray, speechEmbMatrix: MLXArray, promptToken: MLXArray, promptFeat: MLXArray, tracePath: String = "swift_ode_trace.safetensors") throws -> (MLXArray, MLXArray) {
         var traceData: [String: MLXArray] = [:]

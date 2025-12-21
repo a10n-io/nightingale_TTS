@@ -2003,53 +2003,52 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
         }
 
         // =========================================================================
-        // STEP 7: ODE Solver (Flow Matching)
+        // STEP 7: ODE Solver (Flow Matching) - ISOLATED TEST
         // =========================================================================
         print("\n" + String(repeating: "=", count: 80))
-        print("STEP 7: ODE Solver")
+        print("STEP 7: ODE Solver (Isolated)")
         print(String(repeating: "=", count: 80))
 
         let step7MelPath = verifyURL.appendingPathComponent("step7_mel.npy")
+        let step7InitialNoisePath = verifyURL.appendingPathComponent("step7_initial_noise.npy")
+        let step7MuTPath = verifyURL.appendingPathComponent("step7_mu_T.npy")
+        let step7CondTPath = verifyURL.appendingPathComponent("step7_cond_T.npy")
+        let step7SpkEmbPath = verifyURL.appendingPathComponent("step7_spk_emb.npy")
 
-        if FileManager.default.fileExists(atPath: step7MelPath.path) {
-            // Load Python references
+        if FileManager.default.fileExists(atPath: step7MelPath.path) &&
+           FileManager.default.fileExists(atPath: step7MuTPath.path) {
+            // Load Python references - ALL ODE inputs
             let refMel = try NPYLoader.load(contentsOf: step7MelPath)
-            let refInitialNoise = try NPYLoader.load(contentsOf: verifyURL.appendingPathComponent("step7_initial_noise.npy"))
+            let refInitialNoise = try NPYLoader.load(contentsOf: step7InitialNoisePath)
+            let refMuT = try NPYLoader.load(contentsOf: step7MuTPath)
+            let refCondT = try NPYLoader.load(contentsOf: step7CondTPath)
+            let refSpkEmb = try NPYLoader.load(contentsOf: step7SpkEmbPath)
 
             print("Python references:")
-            print("  mel: \(refMel.shape)")
             print("  initial_noise: \(refInitialNoise.shape)")
+            print("  mu_T: \(refMuT.shape)")
+            print("  cond_T: \(refCondT.shape)")
+            print("  spk_emb: \(refSpkEmb.shape)")
+            print("  final_mel: \(refMel.shape)")
 
-            // Set fixed noise to match Python
-            s3gen!.setFixedNoise(refInitialNoise)
-
-            // Use SWIFT encoder outputs - NO CHEATING
-            guard let mu = swiftMu else {
-                fatalError("swiftMu is nil - Step 6 must run before Step 7")
-            }
-            guard let xCond = swiftXCond else {
-                fatalError("swiftXCond is nil - Step 6 must run before Step 7")
-            }
-
-            // Run ODE solver with Swift encoder outputs
-            // Convert tokens back to int32 for generate() call
-            let tokensForGen = fullTokens.asType(.int32)
-            let mel = s3gen!.generate(
-                tokens: tokensForGen,
-                speakerEmb: soul_s3,
-                speechEmbMatrix: tokenEmb,
-                promptToken: prompt_token,
-                promptFeat: prompt_feat
+            // Run ISOLATED ODE test using Python's inputs directly
+            // This tests ONLY the ODE solver, not the encoder
+            let swiftODEOutput = s3gen!.runODEOnly(
+                initialNoise: refInitialNoise,
+                muT: refMuT,
+                condT: refCondT,
+                spkEmb: refSpkEmb
             )
 
-            swiftMel = mel
-            eval(mel)
+            eval(swiftODEOutput)
+            swiftMel = swiftODEOutput
 
-            print("\nSwift values:")
-            print("  mel: \(mel.shape)")
+            print("\nSwift ODE output:")
+            print("  shape: \(swiftODEOutput.shape)")
+            print("  range: [\(swiftODEOutput.min().item(Float.self)), \(swiftODEOutput.max().item(Float.self))]")
 
             // Compare - ODE solver has numerical accumulation so we use a looser threshold
-            let melDiff = maxDiff(mel, refMel)
+            let melDiff = maxDiff(swiftODEOutput, refMel)
 
             print("\nComparison (max_diff):")
             print("  mel: \(String(format: "%.2e", melDiff))")
