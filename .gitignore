@@ -141,3 +141,6 @@ baked_voices/*/npy/
 Network Trash Folder
 Temporary Items
 .apdisk
+
+# Generated audio output
+test_audio/

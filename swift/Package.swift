@@ -40,6 +40,10 @@ let package = Package(
             name: "VerifyLive",
             targets: ["VerifyLive"]
         ),
+        .executable(
+            name: "GenerateAudio",
+            targets: ["GenerateAudio"]
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.21.0"),
@@ -95,6 +99,11 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser")
             ],
             path: "test_scripts/VerifyLive"
+        ),
+        .executableTarget(
+            name: "GenerateAudio",
+            dependencies: ["Nightingale"],
+            path: "test_scripts/GenerateAudio"
         ),
     ]
 )
