@@ -513,6 +513,11 @@ func remapS3Key(_ key: String) -> String? {
     k = k.replacingOccurrences(of: "pos_bias_u", with: "posBiasU")
     k = k.replacingOccurrences(of: "pos_bias_v", with: "posBiasV")
 
+    // Python uses norm3 for the second LayerNorm (after attn), Swift uses norm2
+    if k.contains(".norm3.") {
+        k = k.replacingOccurrences(of: ".norm3.", with: ".norm2.")
+    }
+
     // FeedForward components
     k = k.replacingOccurrences(of: "ff.net.0.", with: "ff.layers.0.")
     k = k.replacingOccurrences(of: "ff.net.2.", with: "ff.layers.1.")
@@ -1937,6 +1942,10 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
 
             // Enable debug mode to trace decoder internals
             FlowMatchingDecoder.debugStep = 1
+            TimeMLP.debugEnabled = true  // Trace time embedding
+            FlowTransformerBlock.debugEnabled = true  // Trace first transformer FF path
+            FlowTransformerBlock.debugBlockId = 0
+            FlowTransformerBlock.debugTfmrId = 0
             let swiftVelocityT0 = s3gen!.decoder(
                 x: refInitialNoise7a,
                 mu: refMuT,
@@ -1946,6 +1955,8 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
                 mask: refMaskT
             )
             FlowMatchingDecoder.debugStep = 0
+            TimeMLP.debugEnabled = false
+            FlowTransformerBlock.debugEnabled = false
 
             eval(swiftVelocityT0)
 
@@ -1957,6 +1968,24 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
 
             print("\nComparison (max_diff):")
             print("  velocity_t0: \(String(format: "%.2e", velocityDiff))")
+
+            // Debug: find where max diff occurs
+            let diffTensor = abs(swiftVelocityT0 - refVelocityT0)
+            let diffFlat = diffTensor.flattened()
+            let maxIdx = argMax(diffFlat).item(Int.self)
+            let shape = swiftVelocityT0.shape
+            let c = maxIdx / (shape[1] * shape[2])
+            let h = (maxIdx % (shape[1] * shape[2])) / shape[2]
+            let w = maxIdx % shape[2]
+            print("  Max diff at (\(c), \(h), \(w)): Swift=\(swiftVelocityT0[c, h, w].item(Float.self)), Python=\(refVelocityT0[c, h, w].item(Float.self))")
+
+            // Check a few specific locations
+            print("  Sample comparisons:")
+            for loc in [(0, 0, 0), (0, 40, 348), (0, 70, 504)] {
+                let sw = swiftVelocityT0[loc.0, loc.1, loc.2].item(Float.self)
+                let py = refVelocityT0[loc.0, loc.1, loc.2].item(Float.self)
+                print("    [\(loc.0),\(loc.1),\(loc.2)]: Swift=\(String(format: "%.4f", sw)), Python=\(String(format: "%.4f", py)), diff=\(String(format: "%.4f", abs(sw - py)))")
+            }
 
             // For a single forward pass, we should get very close match
             let step7aThreshold: Float = 0.1

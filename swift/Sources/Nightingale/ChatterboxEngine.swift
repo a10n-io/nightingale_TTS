@@ -422,8 +422,23 @@ public actor ChatterboxEngine {
         var remapped: [String: MLXArray] = [:]
         for (key, value) in weights {
             if let newKey = remapS3Key(key) {
-                // Note: Decoder Conv1d weights in s3gen_fp16.safetensors are already in correct MLX format
-                remapped[newKey] = value
+                var w = value
+
+                // Transpose Linear weights from PyTorch [out, in] to MLX [in, out] format
+                // This applies to all Linear layers in the decoder:
+                // - mlp_linear (ResNet blocks)
+                // - time_mlp.linear_1, time_mlp.linear_2
+                // - attention projections (query_proj, key_proj, value_proj, out_proj)
+                // - feedforward layers (ff.layers.0, ff.layers.1)
+                let isDecoderLinear = key.contains("decoder") && key.hasSuffix(".weight") && w.ndim == 2
+                let isTimeMLP = key.contains("time_mlp") && key.contains("linear") && key.hasSuffix(".weight") && w.ndim == 2
+
+                if (isDecoderLinear || isTimeMLP) && !key.contains(".conv.") && !key.contains("norm.") {
+                    // PyTorch Linear: [out_features, in_features] -> MLX: [in_features, out_features]
+                    w = w.transposed()
+                }
+
+                remapped[newKey] = w
             }
         }
         return remapped
