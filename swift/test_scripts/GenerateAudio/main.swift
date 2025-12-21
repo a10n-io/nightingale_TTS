@@ -470,18 +470,19 @@ if let eotToken = vocab["<|endoftranscript|>"] { tokens.append(eotToken) }
 let textTokens = MLXArray(tokens.map { Int32($0) }).expandedDimensions(axis: 0)
 print("  Tokens: \(tokens.count)")
 
-// T3 Generation - use realistic settings for natural speech
-print("  Generating speech tokens (temp=0.7, topP=0.95)...")
+// T3 Generation - match Python settings for deterministic output
+// Note: Using maxTokens=100 to match Python output (Python generated 98 tokens)
+print("  Generating speech tokens (temp=0.001, topP=1.0, repPen=2.0, maxTokens=100)...")
 let speechTokensRaw = t3.generate(
     textTokens: textTokens,
     speakerEmb: speakerEmb,
     condTokens: condTokens,
-    maxTokens: 500,
-    temperature: 0.7,
+    maxTokens: 100,  // Match Python: generates ~98 tokens for this length text
+    temperature: 0.001,  // Match Python's near-deterministic sampling
     emotionValue: emotionAdv[0, 0].item(Float.self),
     cfgWeight: 0.5,
-    repetitionPenalty: 1.2,
-    topP: 0.95,
+    repetitionPenalty: 2.0,  // Match Python's repetition penalty
+    topP: 1.0,  // Match Python (no nucleus sampling)
     minP: 0.05
 )
 var speechTokensClean = speechTokensRaw.filter { $0 != 6561 && $0 != 6562 }
