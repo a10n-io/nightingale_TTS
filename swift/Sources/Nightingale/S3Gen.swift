@@ -400,8 +400,8 @@ public class PreLookahead: Module {
 
 // Reusing FlowTransformerBlock logic but renamed for clarity/mapping
 public class S3ConformerFeedForward: Module {
-    let w1: FixedLinear
-    let w2: FixedLinear
+    public let w1: FixedLinear  // Made public for debugging
+    public let w2: FixedLinear  // Made public for debugging
 
     public init(dim: Int, mult: Int = 4, dropout: Float = 0.1) {
         // Python PositionwiseFeedForward: w_1 -> act -> dropout -> w_2
@@ -475,7 +475,7 @@ public class ConformerBlock: Module {
     let normMHA: LayerNorm
     public let attention: RelPositionMultiHeadAttention  // Made public for debugging
     let normFF: LayerNorm
-    let feedForward: S3ConformerFeedForward
+    public let feedForward: S3ConformerFeedForward  // Made public for debugging
     
     public init(embedDim: Int, numHeads: Int = 8, headDim: Int = 64, dropout: Float = 0.1) {
         // Python uses eps=1e-12 for LayerNorm
@@ -1019,8 +1019,8 @@ public class UpsampleEncoder: Module {
 // MARK: - Flow Blocks (Decoder)
 
 public class CausalBlock1D: Module {
-    let conv: CausalConv1d
-    let norm: LayerNorm
+    public let conv: CausalConv1d
+    public let norm: LayerNorm
     
     public init(dim: Int, dimOut: Int) {
         self.conv = CausalConv1d(inputChannels: dim, outputChannels: dimOut, kernelSize: 3)
@@ -1048,8 +1048,8 @@ public class CausalBlock1D: Module {
 }
 
 public class CausalResNetBlock: Module {
-    let block1: CausalBlock1D
-    let block2: CausalBlock1D
+    public let block1: CausalBlock1D
+    public let block2: CausalBlock1D
     public let mlpLinear: FixedLinear
     let resConv: Conv1d  // Use regular Conv1d like Python (not CausalConv1d)
 
@@ -1930,6 +1930,22 @@ public class S3Gen: Module {
         let config = S3GenConfig()
         self.inputEmbedding = Embedding(embeddingCount: config.vocabSize, dimensions: config.inputDim)
 
+        // DEBUG: Check what keys are in flowWeights
+        print("DEBUG S3Gen.init: flowWeights has \(flowWeights.count) total keys"); fflush(stdout)
+
+        // Print first 50 keys to see what we have
+        let allKeys = Array(flowWeights.keys.sorted().prefix(50))
+        print("DEBUG S3Gen.init: First 50 keys:"); fflush(stdout)
+        for key in allKeys {
+            print("  \(key)"); fflush(stdout)
+        }
+
+        let encoderRelatedKeys = flowWeights.keys.filter { $0.contains("encoder") }.prefix(30).sorted()
+        print("DEBUG S3Gen.init: Encoder-related keys (\(encoderRelatedKeys.count)):"); fflush(stdout)
+        for key in encoderRelatedKeys {
+            print("  \(key)"); fflush(stdout)
+        }
+
         // Load input_embedding weights
         for (key, value) in flowWeights {
             if key.hasPrefix("s3gen.flow.input_embedding.") {
@@ -1961,11 +1977,25 @@ public class S3Gen: Module {
         }
 
         print("DEBUG S3Gen: Creating UpsampleEncoder with \(encoderWeights.count) weights"); fflush(stdout)
-        // Check what position encoding keys exist
+
+        // Check what embed-related keys exist after remapping
+        let embedKeys = encoderWeights.keys.filter { $0.contains("embed") }.sorted()
+        print("DEBUG S3Gen: Embed-related keys (\(embedKeys.count)):"); fflush(stdout)
+        for key in embedKeys.prefix(20) {
+            if let arr = encoderWeights[key] {
+                print("  \(key): shape=\(arr.shape)"); fflush(stdout)
+            }
+        }
+
+        // Check specifically for norm and pos_enc keys
+        let normKeys = encoderWeights.keys.filter { $0.contains("norm") && $0.contains("embed") }.sorted()
+        print("DEBUG S3Gen: Norm keys for embed (\(normKeys.count)): \(normKeys)"); fflush(stdout)
+
         let posEncKeys = encoderWeights.keys.filter { $0.contains("pos_enc.pe") }
+        print("DEBUG S3Gen: Position encoding keys (\(posEncKeys.count)): \(posEncKeys.sorted())"); fflush(stdout)
         for key in posEncKeys {
             if let pe = encoderWeights[key] {
-                print("DEBUG S3Gen: Found position encoding '\(key)' with shape \(pe.shape)"); fflush(stdout)
+                print("  \(key): shape=\(pe.shape)"); fflush(stdout)
             }
         }
         // Create UpsampleEncoder with weights for PreLookaheadLayer
@@ -1978,15 +2008,17 @@ public class S3Gen: Module {
         print("DEBUG S3Gen: Creating encoderProj FixedLinear(\(config.inputDim), \(config.melChannels))..."); fflush(stdout)
         self.encoderProj = FixedLinear(config.inputDim, config.melChannels, name: "S3Gen.encoderProj")
         print("DEBUG S3Gen: encoderProj created"); fflush(stdout)
-        // Load encoderProj weights
+        // Load encoderProj weights (MUST transpose PyTorch [out, in] -> MLX [in, out])
         print("DEBUG S3Gen: About to iterate flowWeights for encoderProj..."); fflush(stdout)
         for (key, value) in flowWeights {
             if key.hasPrefix("s3gen.flow.encoder_proj.") {
                 let remappedKey = key.replacingOccurrences(of: "s3gen.flow.encoder_proj.", with: "")
                 if remappedKey == "weight" {
-                    print("DEBUG S3Gen: Updating encoderProj weight..."); fflush(stdout)
-                    encoderProj.update(parameters: ModuleParameters.unflattened(["weight": value]))
-                    print("DEBUG S3Gen: Loaded encoderProj.weight"); fflush(stdout)
+                    // Transpose PyTorch weight [80, 512] -> MLX format [512, 80]
+                    let transposedWeight = value.T
+                    print("DEBUG S3Gen: Transposing encoderProj weight from \(value.shape) to \(transposedWeight.shape)"); fflush(stdout)
+                    encoderProj.update(parameters: ModuleParameters.unflattened(["weight": transposedWeight]))
+                    print("DEBUG S3Gen: Loaded encoderProj.weight (transposed)"); fflush(stdout)
                 } else if remappedKey == "bias" {
                     print("DEBUG S3Gen: Updating encoderProj bias..."); fflush(stdout)
                     encoderProj.update(parameters: ModuleParameters.unflattened(["bias": value]))
@@ -1995,9 +2027,11 @@ public class S3Gen: Module {
             } else if key.hasPrefix("flow.encoder_proj.") {
                 let remappedKey = key.replacingOccurrences(of: "flow.encoder_proj.", with: "")
                 if remappedKey == "weight" {
-                    print("DEBUG S3Gen: Updating encoderProj weight (flow prefix)..."); fflush(stdout)
-                    encoderProj.update(parameters: ModuleParameters.unflattened(["weight": value]))
-                    print("DEBUG S3Gen: Loaded encoderProj.weight"); fflush(stdout)
+                    // Transpose PyTorch weight [80, 512] -> MLX format [512, 80]
+                    let transposedWeight = value.T
+                    print("DEBUG S3Gen: Transposing encoderProj weight from \(value.shape) to \(transposedWeight.shape)"); fflush(stdout)
+                    encoderProj.update(parameters: ModuleParameters.unflattened(["weight": transposedWeight]))
+                    print("DEBUG S3Gen: Loaded encoderProj.weight (transposed)"); fflush(stdout)
                 } else if remappedKey == "bias" {
                     print("DEBUG S3Gen: Updating encoderProj bias (flow prefix)..."); fflush(stdout)
                     encoderProj.update(parameters: ModuleParameters.unflattened(["bias": value]))
@@ -2218,6 +2252,16 @@ public class S3Gen: Module {
             }
         }
 
+        // Check finalProj weights
+        let fpW = decoder.finalProj.weight; eval(fpW)
+        print("WEIGHT: finalProj.weight \(fpW.shape) range=[\(fpW.min().item(Float.self)), \(fpW.max().item(Float.self))], mean=\(fpW.mean().item(Float.self))")
+        if let fpB = decoder.finalProj.bias {
+            eval(fpB)
+            print("WEIGHT: finalProj.bias \(fpB.shape) range=[\(fpB.min().item(Float.self)), \(fpB.max().item(Float.self))], mean=\(fpB.mean().item(Float.self))")
+        }
+        print("WEIGHT: Expected finalProj.weight: shape=[80,1,256], range≈[-0.76,0.87], mean≈0.001")
+        print("WEIGHT: Expected finalProj.bias: shape=[80], range≈[-0.10,-0.04], mean≈-0.074")
+
         // Transpose conds and mu for decoder [B, C, T]
         let condsT = conds.transposed(0, 2, 1)
         let muT = mu.transposed(0, 2, 1)
@@ -2300,46 +2344,198 @@ public class S3Gen: Module {
         eval(generatedMel)
         print("TRACE 7: generatedMel shape=\(generatedMel.shape), range=[\(generatedMel.min().item(Float.self)), \(generatedMel.max().item(Float.self))]")
 
-        // Debug: Check mel channel energies
-        print("MEL CHANNEL ENERGIES (raw from flow decoder):")
-        for i in [0, 1, 39, 40, 78, 79] {
+        // Debug: Check raw mel from flow decoder
+        print("MEL CHANNEL ENERGIES (decoder output):")
+        for i in [0, 10, 20, 30, 40, 50, 60, 70, 79] {
             let channelEnergy = generatedMel[0, i, 0...].mean().item(Float.self)
-            print("  Channel \(i): \(channelEnergy)")
+            print(String(format: "  Channel %2d: %.4f", i, channelEnergy))
         }
 
-        // CRITICAL FIX: Flow decoder outputs mel with REVERSED frequency bins
-        // Channel 0 should be low freq (high energy) but it's actually high freq (low energy)
-        // Need to reverse channels: [0,1,2,...,79] → [79,78,77,...,0]
-        var melReversed = MLXArray.zeros(like: generatedMel)
-        for c in 0..<80 {
-            melReversed[0..., c, 0...] = generatedMel[0..., 79 - c, 0...]
-        }
-        eval(melReversed)
-
-        print("\nMEL AFTER CHANNEL REVERSAL:")
-        for i in [0, 1, 39, 40, 78, 79] {
-            let channelEnergy = melReversed[0, i, 0...].mean().item(Float.self)
-            print("  Channel \(i): \(channelEnergy)")
-        }
-
-        // FIX: The flow decoder outputs normalized mel with low dynamic range
-        // Need to expand the range and map to log-mel dB scale expected by vocoder
-        // Use exponential-like transformation to increase dynamic range
-        // Then map to target range [-8, -2]
-        let melExpanded = melReversed * 2.5  // Expand differences
-        let melForVocoder = melExpanded - 5.0 // Shift to log-mel dB range
-        eval(melForVocoder)
-        print("\nMEL AFTER SCALE CORRECTION (for vocoder):")
-        print("  Range: [\(melForVocoder.min().item(Float.self)), \(melForVocoder.max().item(Float.self))]")
-        for i in [0, 1, 39, 40, 78, 79] {
-            let channelEnergy = melForVocoder[0, i, 0...].mean().item(Float.self)
-            print("  Channel \(i): \(channelEnergy)")
-        }
-
-        let wav = vocoder(melForVocoder)
+        // CRITICAL: Pass decoder mel output DIRECTLY to vocoder (match Python)
+        // Python does: output_mels, _ = self.flow.inference(...)
+        //              output_wavs, *_ = self.mel2wav.inference(speech_feat=output_mels, ...)
+        // NO transformation is applied between decoder and vocoder!
+        let wav = vocoder(generatedMel)
         eval(wav)
         print("TRACE 8: vocoder output shape=\(wav.shape), range=[\(wav.min().item(Float.self)), \(wav.max().item(Float.self))]")
         return wav
+    }
+
+    // Get raw mel from encoder + flow decoder (before vocoder transformation)
+    public func getEncoderAndFlowOutput(
+        tokens: MLXArray,
+        speakerEmb: MLXArray,
+        speechEmbMatrix: MLXArray,
+        promptToken: MLXArray,
+        promptFeat: MLXArray
+    ) -> (MLXArray, MLXArray) {
+        // Same setup as generate() but returns raw mel before vocoder
+
+        // 1. Speaker embedding normalization
+        var spkEmb = speakerEmb
+        let norm = sqrt(sum(spkEmb * spkEmb, axis: 1, keepDims: true)) + 1e-8
+        spkEmb = spkEmb / norm
+        let spkCond = matmul(spkEmb, spkEmbedAffine.weight) + spkEmbedAffine.bias!
+
+        // 2. Prepare inputs
+        let inputs = concatenated([promptToken, tokens], axis: 1)
+        let vocabSize = inputEmbedding.weight.shape[0]
+        let clippedInputs = clip(inputs, min: 0, max: vocabSize - 1)
+
+        // 3. Token embedding
+        let x = inputEmbedding(clippedInputs)
+        eval(x)
+
+        // 4. Encode
+        let h = encoder(x)
+        let mu = encoderProj(h)
+        eval(mu)
+
+        // Save encoder outputs
+        do {
+            try MLX.save(arrays: [
+                "encoder_out": h,
+                "mu": mu
+            ], url: URL(fileURLWithPath: "/Users/a10n/Projects/nightingale_TTS/E2E/swift_encoder_outputs.safetensors"))
+            print("  💾 Saved Swift encoder outputs")
+        } catch {
+            print("  ⚠️  Could not save encoder outputs: \(error)")
+        }
+
+        // 5. Prepare conditions for flow decoder
+        let promptMel = promptFeat
+        let L_pm = promptMel.shape[1]
+        let L_new = mu.shape[1] - L_pm
+        let muZeros = MLXArray.zeros([1, L_new, 80], dtype: mu.dtype)
+        let conds = concatenated([promptMel, muZeros], axis: 1)
+        eval(conds)
+
+        // 6. Flow decoder - prepare inputs
+        let L_total = conds.shape[1]
+        let condsT = conds.transposed(0, 2, 1)
+        let muT = mu.transposed(0, 2, 1)
+        let mask = MLXArray.ones([1, 1, L_total])
+
+        // ODE Parameters
+        let nTimesteps = 10
+        let cfgRate: Float = 0.7
+
+        // Cosine time scheduling
+        var tSpan: [Float] = []
+        for i in 0...(nTimesteps) {
+            let linearT = Float(i) / Float(nTimesteps)
+            let cosineT = 1.0 - cos(linearT * 0.5 * Float.pi)
+            tSpan.append(cosineT)
+        }
+
+        // Initialize noise
+        var xt = fixedNoise[0..., 0..., 0..<L_total]
+        eval(xt)
+
+        // Euler ODE solver
+        var currentT = tSpan[0]
+        var dt = tSpan[1] - tSpan[0]
+
+        print("\n🔍 SWIFT ODE TRACE - Step-by-Step")
+        print(String(repeating: "=", count: 80))
+        print("Initial noise: range=[\(xt.min().item(Float.self)), \(xt.max().item(Float.self))], mean=\(xt.mean().item(Float.self))")
+        print("Time schedule: \(tSpan)")
+
+        // Save ODE initialization
+        do {
+            try MLX.save(arrays: [
+                "mu_T": muT,
+                "cond_T": condsT,
+                "spk_emb": spkCond,
+                "initial_noise": xt,
+                "t_span": MLXArray(tSpan)
+            ], url: URL(fileURLWithPath: "/Users/a10n/Projects/nightingale_TTS/E2E/swift_ode_init.safetensors"))
+            print("  💾 Saved Swift ODE initialization")
+        } catch {
+            print("  ⚠️  Could not save ODE init: \(error)")
+        }
+
+        for step in 1...nTimesteps {
+            let t = MLXArray([currentT])
+
+            print("\n--- Step \(step)/\(nTimesteps) ---")
+            print("t=\(currentT), dt=\(dt)")
+            print("xt before: range=[\(xt.min().item(Float.self)), \(xt.max().item(Float.self))], mean=\(xt.mean().item(Float.self))")
+
+            // Prepare Batch for CFG: [Cond, Uncond]
+            let xIn = concatenated([xt, xt], axis: 0)
+            let muIn = concatenated([muT, MLXArray.zeros(like: muT)], axis: 0)
+            let spkIn = concatenated([spkCond, MLXArray.zeros(like: spkCond)], axis: 0)
+            let condIn = concatenated([condsT, MLXArray.zeros(like: condsT)], axis: 0)
+            let tIn = concatenated([t, t], axis: 0)
+
+            if step == 1 {
+                print("Decoder inputs (step 1 only):")
+                print("  xIn: \(xIn.shape), range=[\(xIn.min().item(Float.self)), \(xIn.max().item(Float.self))]")
+                print("  muIn: \(muIn.shape), range=[\(muIn.min().item(Float.self)), \(muIn.max().item(Float.self))]")
+                print("  condIn: \(condIn.shape), range=[\(condIn.min().item(Float.self)), \(condIn.max().item(Float.self))]")
+                print("  spkIn: \(spkIn.shape), range=[\(spkIn.min().item(Float.self)), \(spkIn.max().item(Float.self))]")
+            }
+
+            // Forward pass (Batch=2)
+            let vBatch = decoder(x: xIn, mu: muIn, t: tIn, speakerEmb: spkIn, cond: condIn, mask: nil)
+
+            // Split
+            let vCond = vBatch[0].expandedDimensions(axis: 0)
+            let vUncond = vBatch[1].expandedDimensions(axis: 0)
+
+            print("Decoder outputs:")
+            print("  vCond: range=[\(vCond.min().item(Float.self)), \(vCond.max().item(Float.self))], mean=\(vCond.mean().item(Float.self))")
+            print("  vUncond: range=[\(vUncond.min().item(Float.self)), \(vUncond.max().item(Float.self))], mean=\(vUncond.mean().item(Float.self))")
+
+            // CFG Formula: v = (1 + cfg) * vCond - cfg * vUncond
+            let v = (1.0 + cfgRate) * vCond - cfgRate * vUncond
+            eval(v)
+
+            print("  v (after CFG): range=[\(v.min().item(Float.self)), \(v.max().item(Float.self))], mean=\(v.mean().item(Float.self))")
+
+            // Euler step
+            xt = xt + v * dt
+            eval(xt)
+
+            print("xt after: range=[\(xt.min().item(Float.self)), \(xt.max().item(Float.self))], mean=\(xt.mean().item(Float.self))")
+
+            // Save step 1 for comparison
+            if step == 1 {
+                do {
+                    try MLX.save(arrays: [
+                        "x_before": xt - v * dt,  // Reconstruct x_before
+                        "v_cond": vCond,
+                        "v_uncond": vUncond,
+                        "v_cfg": v,
+                        "x_after": xt
+                    ], url: URL(fileURLWithPath: "/Users/a10n/Projects/nightingale_TTS/E2E/swift_ode_step1.safetensors"))
+                    print("  💾 Saved Swift ODE step 1 tensors")
+                } catch {
+                    print("  ⚠️  Could not save step 1 tensors: \(error)")
+                }
+            }
+
+            // Update time
+            currentT = currentT + dt
+            if step < nTimesteps {
+                dt = tSpan[step + 1] - currentT
+            }
+        }
+
+        print("\n" + String(repeating: "=", count: 80))
+
+        // Extract raw mel from ODE output (NO transformation)
+        eval(xt)
+        let rawMel = xt[0..., 0..., L_pm...]
+        eval(rawMel)
+
+        print("RAW MEL FROM FLOW DECODER:")
+        print("  Shape: \(rawMel.shape)")
+        print("  Range: [\(rawMel.min().item(Float.self)), \(rawMel.max().item(Float.self))]")
+        print("  Mean: \(rawMel.mean().item(Float.self))")
+
+        return (mu, rawMel)
     }
 
     // Get encoder output for comparison

@@ -197,11 +197,21 @@ eval(condTokens, speakerEmb, emotionAdv, s3Embedding, s3PromptFeat, s3PromptToke
 print("  ✅ Voice conditioning loaded (Samantha)")
 
 // Load S3Gen (reuse loading logic from VerifyLive)
-let flowURL = modelDir.appendingPathComponent("mlx/python_flow_weights.safetensors")
-let vocoderURL = modelDir.appendingPathComponent("mlx/vocoder_weights.safetensors")
+// Load FULL S3Gen weights (encoder + decoder + embeddings)
+// NOTE: Using *_fixed.safetensors with all Conv1d in consistent MLX format [out, kernel, in]
+let flowURL = modelDir.appendingPathComponent("mlx/s3gen_fp16_fixed.safetensors")
+let vocoderURL = modelDir.appendingPathComponent("mlx/vocoder_weights_fixed_v2.safetensors")
 
 func remapS3Key(_ key: String) -> String? {
     var k = key
+
+    // Strip "s3gen.flow." prefix if present
+    if k.hasPrefix("s3gen.flow.") {
+        k = k.replacingOccurrences(of: "s3gen.flow.", with: "")
+    } else if k.hasPrefix("flow.") {
+        k = k.replacingOccurrences(of: "flow.", with: "")
+    }
+
     if k.hasPrefix("conv_pre") || k.hasPrefix("conv_post") || k.hasPrefix("resblocks") || k.hasPrefix("ups") {
         k = "vocoder." + k
         k = k.replacingOccurrences(of: "conv_pre", with: "convPre")
@@ -227,6 +237,9 @@ func remapS3Key(_ key: String) -> String? {
         return k
     }
     if k.hasPrefix("decoder.") {
+        // CRITICAL: Strip "estimator." - Python has decoder.estimator.*, Swift has decoder.*
+        k = k.replacingOccurrences(of: "decoder.estimator.", with: "decoder.")
+
         k = k.replacingOccurrences(of: ".attn1.", with: ".attention.")
         k = k.replacingOccurrences(of: ".to_q.", with: ".queryProj.")
         k = k.replacingOccurrences(of: ".to_k.", with: ".keyProj.")
@@ -239,6 +252,9 @@ func remapS3Key(_ key: String) -> String? {
         k = k.replacingOccurrences(of: "mid_blocks_", with: "midBlocks.")
         k = k.replacingOccurrences(of: "up_blocks_", with: "upBlocks.")
         k = k.replacingOccurrences(of: ".transformer_", with: ".transformers.")
+        // CRITICAL: Convert final_proj and final_block to camelCase
+        k = k.replacingOccurrences(of: ".final_proj.", with: ".finalProj.")
+        k = k.replacingOccurrences(of: ".final_block.", with: ".finalBlock.")
     }
     if k.hasPrefix("encoder.") {
         k = k.replacingOccurrences(of: "encoder.encoder.", with: "encoder.downEncoder.")
@@ -254,11 +270,13 @@ func remapS3Keys(_ weights: [String: MLXArray], transposeConv1d: Bool = false) -
             let isEmbedding = newKey.contains("Embedding.weight") || newKey.contains("speechEmb.weight")
             let isLinear = newKey.hasSuffix(".weight") && value.ndim == 2 && !isEmbedding
             let isConv1d = newKey.hasSuffix(".weight") && value.ndim == 3
+
             if isLinear {
                 remapped[newKey] = value.T
-            } else if isConv1d && transposeConv1d {
-                let isConvTranspose = newKey.contains("ups.") && newKey.hasSuffix(".weight")
-                remapped[newKey] = isConvTranspose ? value.transposed(1, 2, 0) : value.transposed(0, 2, 1)
+            } else if isConv1d {
+                // CRITICAL: s3gen_fp16.safetensors has weights ALREADY in MLX format [out, kernel, in]
+                // Do NOT transpose! The file was pre-converted for MLX.
+                remapped[newKey] = value
             } else {
                 remapped[newKey] = value
             }
@@ -267,8 +285,14 @@ func remapS3Keys(_ weights: [String: MLXArray], transposeConv1d: Bool = false) -
     return remapped
 }
 
-var s3gen = S3Gen(flowWeights: [:], vocoderWeights: nil)
+// Load weights FIRST before initializing S3Gen
+print("Loading flow weights from: \(flowURL)")
+let flowWeights = try MLX.loadArrays(url: flowURL)
+print("  Loaded \(flowWeights.count) flow weight tensors")
+
+print("Loading vocoder weights from: \(vocoderURL)")
 let vocoderWeights = try MLX.loadArrays(url: vocoderURL)
+print("  Loaded \(vocoderWeights.count) vocoder weight tensors")
 
 // Debug: Print mSource keys being remapped
 print("  DEBUG: Checking mSource key remapping...")
@@ -278,7 +302,103 @@ for key in vocoderWeights.keys where key.contains("m_source") {
     }
 }
 
-s3gen.update(parameters: ModuleParameters.unflattened(remapS3Keys(vocoderWeights, transposeConv1d: true)))
+// Initialize S3Gen with PROPER weights (not empty dict)
+// S3Gen.init will handle encoder weight remapping internally
+print("Initializing S3Gen with flowWeights...")
+var s3gen = S3Gen(flowWeights: flowWeights, vocoderWeights: nil)
+
+// Load vocoder weights via update (vocoder doesn't need special init handling)
+// CRITICAL: vocoder safetensors ALSO has Conv1d in MLX format - do NOT transpose
+print("Loading vocoder weights via update()...")
+s3gen.update(parameters: ModuleParameters.unflattened(remapS3Keys(vocoderWeights, transposeConv1d: false)))
+
+// Load ONLY decoder weights via update (not encoder, which was loaded in init)
+// NOTE: s3gen_fp16.safetensors already has weights in MLX format (Conv1d are [out,kernel,in])
+print("Loading decoder weights via update()...")
+let decoderOnlyWeights = flowWeights.filter { $0.key.contains("decoder") }
+print("  DEBUG: Filtered to \(decoderOnlyWeights.count) decoder-only keys")
+print("  Sample decoder keys:")
+for key in Array(decoderOnlyWeights.keys.sorted().prefix(5)) {
+    print("    \(key)")
+}
+// Check for final_proj specifically
+print("  DEBUG: Checking final_proj keys...")
+for key in decoderOnlyWeights.keys where key.contains("final_proj") {
+    print("    Before remap: '\(key)'")
+    if let remapped = remapS3Key(key) {
+        print("    After remap:  '\(remapped)'")
+    }
+}
+// CRITICAL: s3gen_fp16.safetensors ALREADY has Conv1d in MLX format [out,kernel,in]
+// Do NOT transpose! The file was pre-converted for MLX.
+let remappedDecoderWeights = remapS3Keys(decoderOnlyWeights, transposeConv1d: false)
+print("  After remapping: \(remappedDecoderWeights.count) decoder keys")
+print("  Sample remapped keys:")
+for key in Array(remappedDecoderWeights.keys.sorted().prefix(5)) {
+    print("    \(key)")
+}
+// Check if finalProj keys are in remapped weights
+print("  DEBUG: Checking for finalProj in remapped weights...")
+for key in remappedDecoderWeights.keys where key.contains("finalProj") {
+    print("    Found: '\(key)'")
+}
+// DEBUG: Check a decoder weight BEFORE update
+if let firstWeight = s3gen.decoder.downBlocks[0].resnet.block1.norm.weight {
+    eval(firstWeight)
+    let beforeMean = firstWeight.mean().item(Float.self)
+    let beforeMin = firstWeight.min().item(Float.self)
+    let beforeMax = firstWeight.max().item(Float.self)
+    print("  DEBUG: Decoder downBlocks[0].resnet.block1.norm.weight BEFORE update:")
+    print("    mean=\(beforeMean), range=[\(beforeMin), \(beforeMax)]")
+}
+
+// DEBUG: Check if Conv1d weight was transposed
+if let convWeight = remappedDecoderWeights["decoder.estimator.downBlocks.0.resnet.block1.conv.conv.weight"] {
+    eval(convWeight)
+    print("  DEBUG: Conv1d weight shape AFTER remapping: \(convWeight.shape)")
+    print("    Expected [256, 3, 320] if transposed correctly")
+    print("    Original PyTorch format: [256, 320, 3]")
+}
+
+// Strip "decoder.estimator." prefix and call update() directly on decoder module
+// Python has decoder.estimator.downBlocks but Swift has decoder.downBlocks
+print("  Stripping 'decoder.estimator.' prefix and loading directly to decoder...")
+var decoderWeightsNoPrefix: [String: MLXArray] = [:]
+for (key, value) in remappedDecoderWeights {
+    if key.hasPrefix("decoder.estimator.") {
+        let keyWithoutPrefix = String(key.dropFirst("decoder.estimator.".count))
+        decoderWeightsNoPrefix[keyWithoutPrefix] = value
+    } else if key.hasPrefix("decoder.") {
+        // Some keys might not have "estimator" (e.g., decoder.convIn, decoder.timeMLP)
+        let keyWithoutPrefix = String(key.dropFirst("decoder.".count))
+        decoderWeightsNoPrefix[keyWithoutPrefix] = value
+    }
+}
+
+// DEBUG: Check the same Conv1d weight after prefix stripping
+if let convWeight = decoderWeightsNoPrefix["downBlocks.0.resnet.block1.conv.conv.weight"] {
+    eval(convWeight)
+    print("  DEBUG: Conv1d weight shape AFTER prefix strip: \(convWeight.shape)")
+}
+print("  Stripped to \(decoderWeightsNoPrefix.count) keys without 'decoder.' prefix")
+print("  Sample stripped keys:")
+for key in Array(decoderWeightsNoPrefix.keys.sorted().prefix(5)) {
+    print("    \(key)")
+}
+
+// Load directly to decoder
+s3gen.decoder.update(parameters: ModuleParameters.unflattened(decoderWeightsNoPrefix))
+
+// DEBUG: Check the same decoder weight AFTER update
+if let firstWeight = s3gen.decoder.downBlocks[0].resnet.block1.norm.weight {
+    eval(firstWeight)
+    let afterMean = firstWeight.mean().item(Float.self)
+    let afterMin = firstWeight.min().item(Float.self)
+    let afterMax = firstWeight.max().item(Float.self)
+    print("  DEBUG: Decoder downBlocks[0].resnet.block1.norm.weight AFTER update:")
+    print("    mean=\(afterMean), range=[\(afterMin), \(afterMax)]")
+    print("    Expected Python: mean=0.535156")
+}
 
 // Debug: Verify mSource.linear weights after loading
 print("  DEBUG: mSource.linear weights after update:")
@@ -288,13 +408,42 @@ print("    shape: \(mSourceWeight.shape)")
 print("    values: \(mSourceWeight.flattened().asArray(Float.self))")
 print("    Expected Python: [-0.00117903, -0.00026658, -0.00039365, ...]")
 
-let flowWeights = try MLX.loadArrays(url: flowURL)
-s3gen.update(parameters: ModuleParameters.unflattened(remapS3Keys(flowWeights, transposeConv1d: false)))
 eval(s3gen)
 
 // Enable vocoder debug output
 Mel2Wav.debugEnabled = true
-print("  ✅ S3Gen loaded")
+print("  ✅ S3Gen loaded (encoder+decoder+vocoder)")
+
+// Verify encoder and encoderProj weights are loaded correctly
+print("\n🔍 DEBUG: Weight verification:")
+
+// Check encoder embedding
+let encEmbWeight = s3gen.inputEmbedding.weight
+eval(encEmbWeight)
+print("  inputEmbedding.weight: shape=\(encEmbWeight.shape), range=[\(encEmbWeight.min().item(Float.self)), \(encEmbWeight.max().item(Float.self))]")
+
+// Check encoder first layer (encoders[0])
+let encFirstLayerW = s3gen.encoder.encoders[0].feedForward.w1.weight
+eval(encFirstLayerW)
+print("  encoder.encoders[0].feedForward.w1.weight:")
+print("    Shape: \(encFirstLayerW.shape) (expected: [2048, 512])")
+print("    Range: [\(encFirstLayerW.min().item(Float.self)), \(encFirstLayerW.max().item(Float.self))] (expected: ≈[-0.35, 0.39])")
+
+// Check encoderProj
+let epWeight = s3gen.encoderProj.weight
+eval(epWeight)
+let epMean = epWeight.mean().item(Float.self)
+let epMin = epWeight.min().item(Float.self)
+let epMax = epWeight.max().item(Float.self)
+print("  encoderProj.weight:")
+print("    Shape: \(epWeight.shape) (expected: [512, 80])")
+print("    Mean: \(epMean) (expected: ≈0.000109)")
+print("    Range: [\(epMin), \(epMax)] (expected: ≈[-0.131, 0.128])")
+if abs(epMean) > 0.01 || abs(epMin) > 0.2 || abs(epMax) > 0.2 {
+    print("    ⚠️ WARNING: encoderProj weights look wrong!")
+} else {
+    print("    ✅ encoderProj weights correct!")
+}
 
 let speechEmbMatrix = t3.speechEmb.weight
 eval(speechEmbMatrix)
@@ -341,8 +490,24 @@ let speechTokens = MLXArray(speechTokensClean.map { Int32($0) }).expandedDimensi
 eval(speechTokens)
 print("  Generated \(speechTokensClean.count) speech tokens")
 
-// S3Gen
-print("  Running S3Gen...")
+// S3Gen - SKIP VOCODER, JUST GET MEL
+print("  Running S3Gen (just encoder+ODE, no vocoder)...")
+let (encOut, mel) = s3gen.getEncoderAndFlowOutput(
+    tokens: speechTokens,
+    speakerEmb: s3Embedding,
+    speechEmbMatrix: speechEmbMatrix,
+    promptToken: s3PromptToken,
+    promptFeat: s3PromptFeat
+)
+eval(mel)
+
+// Save mel for Python comparison
+let melSaveURL = URL(fileURLWithPath: "\(PROJECT_ROOT)/E2E/swift_generated_mel_raw.safetensors")
+try MLX.save(arrays: ["mel": mel], url: melSaveURL)
+print("  Saved mel to E2E/swift_generated_mel_raw.safetensors")
+
+// Now run full pipeline for audio
+print("  Running full S3Gen with vocoder...")
 let audio = s3gen.generate(
     tokens: speechTokens,
     speakerEmb: s3Embedding,
