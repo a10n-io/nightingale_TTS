@@ -1567,8 +1567,8 @@ public class SineGen: Module {
 }
 
 public class SourceModuleHnNSF: Module {
-    let sineGen: SineGen
-    let linear: FixedLinear
+    public let sineGen: SineGen
+    public let linear: FixedLinear
     
     public init(samplingRate: Int, harmonicNum: Int = 8, sineAmp: Float = 0.1, noiseStd: Float = 0.003) {
         self.sineGen = SineGen(samplingRate: Float(samplingRate), harmonicNum: harmonicNum, sineAmp: sineAmp, noiseStd: noiseStd)
@@ -2299,6 +2299,14 @@ public class S3Gen: Module {
         let generatedMel = xt[0..., 0..., L_pm...]
         eval(generatedMel)
         print("TRACE 7: generatedMel shape=\(generatedMel.shape), range=[\(generatedMel.min().item(Float.self)), \(generatedMel.max().item(Float.self))]")
+
+        // Debug: Check mel channel energies
+        print("MEL CHANNEL ENERGIES (ch0=low freq should be high):")
+        for i in [0, 1, 39, 40, 78, 79] {
+            let channelEnergy = generatedMel[0, i, 0...].mean().item(Float.self)
+            print("  Channel \(i): \(channelEnergy)")
+        }
+
         let wav = vocoder(generatedMel)
         eval(wav)
         print("TRACE 8: vocoder output shape=\(wav.shape), range=[\(wav.min().item(Float.self)), \(wav.max().item(Float.self))]")

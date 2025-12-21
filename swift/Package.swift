@@ -48,6 +48,10 @@ let package = Package(
             name: "GenerateAudioE2E",
             targets: ["GenerateAudioE2E"]
         ),
+        .executable(
+            name: "TestVocoder",
+            targets: ["TestVocoder"]
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.21.0"),
@@ -116,6 +120,11 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser")
             ],
             path: "test_scripts/GenerateAudioE2E"
+        ),
+        .executableTarget(
+            name: "TestVocoder",
+            dependencies: ["Nightingale"],
+            path: "test_scripts/TestVocoder"
         ),
     ]
 )

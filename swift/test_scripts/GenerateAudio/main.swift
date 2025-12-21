@@ -162,26 +162,6 @@ let outputDir = URL(fileURLWithPath: "\(PROJECT_ROOT)/test_audio/swift")
 
 try? FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
 
-// Load test sentences from JSON
-struct TestSentence: Codable {
-    let id: String
-    let description: String
-    let text_en: String
-    let text_nl: String
-}
-
-let testSentencesURL = URL(fileURLWithPath: "\(PROJECT_ROOT)/E2E/test_sentences.json")
-let testSentencesData = try Data(contentsOf: testSentencesURL)
-let testSentences = try JSONDecoder().decode([TestSentence].self, from: testSentencesData)
-print("Loaded \(testSentences.count) test sentences")
-
-// Timestamp for file naming
-let dateFormatter = DateFormatter()
-dateFormatter.dateFormat = "yyyyMMdd_HHmmss"
-let timestamp = dateFormatter.string(from: Date())
-
-let voiceName = "samantha"
-
 print("\nLoading models...")
 
 // Load tokenizer
@@ -289,10 +269,31 @@ func remapS3Keys(_ weights: [String: MLXArray], transposeConv1d: Bool = false) -
 
 var s3gen = S3Gen(flowWeights: [:], vocoderWeights: nil)
 let vocoderWeights = try MLX.loadArrays(url: vocoderURL)
+
+// Debug: Print mSource keys being remapped
+print("  DEBUG: Checking mSource key remapping...")
+for key in vocoderWeights.keys where key.contains("m_source") {
+    if let remapped = remapS3Key(key), let value = vocoderWeights[key] {
+        print("    '\(key)' -> '\(remapped)' (shape \(value.shape))")
+    }
+}
+
 s3gen.update(parameters: ModuleParameters.unflattened(remapS3Keys(vocoderWeights, transposeConv1d: true)))
+
+// Debug: Verify mSource.linear weights after loading
+print("  DEBUG: mSource.linear weights after update:")
+let mSourceWeight = s3gen.vocoder.mSource.linear.weight
+eval(mSourceWeight)
+print("    shape: \(mSourceWeight.shape)")
+print("    values: \(mSourceWeight.flattened().asArray(Float.self))")
+print("    Expected Python: [-0.00117903, -0.00026658, -0.00039365, ...]")
+
 let flowWeights = try MLX.loadArrays(url: flowURL)
 s3gen.update(parameters: ModuleParameters.unflattened(remapS3Keys(flowWeights, transposeConv1d: false)))
 eval(s3gen)
+
+// Enable vocoder debug output
+Mel2Wav.debugEnabled = true
 print("  ✅ S3Gen loaded")
 
 let speechEmbMatrix = t3.speechEmb.weight
@@ -305,71 +306,94 @@ print(String(repeating: "=", count: 80))
 // Set deterministic seed to match Python (SEED = 42)
 MLXRandom.seed(42)
 
-// QUICK TEST: Use exact same text as Python for comparison
-let testText = "Do you think the model can handle the rising intonation at the end of this sentence?"
-let limitedSentences = [testSentences[0]]  // Just need one for iteration
-let totalSamples = 1
-var generated = 0
+// User requested text
+let testText = "Wow! I absolutely cannot believe that it worked on the first try!"
+let lang = "en"
 
-for sentence in limitedSentences {
-    generated += 1
-    let text = testText  // Override with fixed text
-    let lang = "en"
+print("\nGenerating audio for:")
+print("  Text: \(testText)")
 
-    print("\n[\(generated)/\(totalSamples)] QUICK TEST")
-    print("  Text: \(text.prefix(60))\(text.count > 60 ? "..." : "")")
+// Tokenize
+let normalized = normalizeTextForTokenizer(testText)
+var tokens = tokenize(normalized, vocab: vocab, merges: merges, languageId: lang)
+if let sotToken = vocab["<|startoftranscript|>"] { tokens.insert(sotToken, at: 0) }
+if let eotToken = vocab["<|endoftranscript|>"] { tokens.append(eotToken) }
+let textTokens = MLXArray(tokens.map { Int32($0) }).expandedDimensions(axis: 0)
+print("  Tokens: \(tokens.count)")
 
-    // Tokenize
-    let normalized = normalizeTextForTokenizer(text)
-    var tokens = tokenize(normalized, vocab: vocab, merges: merges, languageId: lang)
-    if let sotToken = vocab["<|startoftranscript|>"] { tokens.insert(sotToken, at: 0) }
-    if let eotToken = vocab["<|endoftranscript|>"] { tokens.append(eotToken) }
-    let textTokens = MLXArray(tokens.map { Int32($0) }).expandedDimensions(axis: 0)
-    print("  Tokens: \(tokens.count)")
+// T3 Generation - use realistic settings for natural speech
+print("  Generating speech tokens (temp=0.7, topP=0.95)...")
+let speechTokensRaw = t3.generate(
+    textTokens: textTokens,
+    speakerEmb: speakerEmb,
+    condTokens: condTokens,
+    maxTokens: 500,
+    temperature: 0.7,
+    emotionValue: emotionAdv[0, 0].item(Float.self),
+    cfgWeight: 0.5,
+    repetitionPenalty: 1.2,
+    topP: 0.95,
+    minP: 0.05
+)
+var speechTokensClean = speechTokensRaw.filter { $0 != 6561 && $0 != 6562 }
+if speechTokensClean.isEmpty { speechTokensClean = [1] }
+let speechTokens = MLXArray(speechTokensClean.map { Int32($0) }).expandedDimensions(axis: 0)
+eval(speechTokens)
+print("  Generated \(speechTokensClean.count) speech tokens")
 
-    // T3 Generation - DETERMINISTIC settings (matching E2E verify_e2e.py)
-    // This allows direct comparison with Python reference outputs
-    print("  Generating speech tokens (DETERMINISTIC: temp=0.001, topP=1.0, repPenalty=2.0)...")
-    let speechTokensRaw = t3.generate(
-        textTokens: textTokens,
-        speakerEmb: speakerEmb,
-        condTokens: condTokens,
-        maxTokens: 500,
-        temperature: 0.001,  // Near-greedy (E2E test setting)
-        emotionValue: emotionAdv[0, 0].item(Float.self),
-        cfgWeight: 0.5,
-        repetitionPenalty: 2.0,  // Aggressive (E2E test setting)
-        topP: 1.0,               // No filtering (E2E test setting)
-        minP: 0.05
-    )
-    var speechTokensClean = speechTokensRaw.filter { $0 != 6561 && $0 != 6562 }
-    if speechTokensClean.isEmpty { speechTokensClean = [1] }
-    let speechTokens = MLXArray(speechTokensClean.map { Int32($0) }).expandedDimensions(axis: 0)
-    eval(speechTokens)
-    print("  Generated \(speechTokensClean.count) speech tokens")
+// S3Gen
+print("  Running S3Gen...")
+let audio = s3gen.generate(
+    tokens: speechTokens,
+    speakerEmb: s3Embedding,
+    speechEmbMatrix: speechEmbMatrix,
+    promptToken: s3PromptToken,
+    promptFeat: s3PromptFeat
+)
+eval(audio)
 
-    // S3Gen
-    print("  Running S3Gen...")
-    let audio = s3gen.generate(
-        tokens: speechTokens,
-        speakerEmb: s3Embedding,
-        speechEmbMatrix: speechEmbMatrix,
-        promptToken: s3PromptToken,
-        promptFeat: s3PromptFeat
-    )
-    eval(audio)
+let audioSamples = audio.squeezed().asArray(Float.self)
+let duration = Float(audioSamples.count) / 24000.0
+print("  Audio: \(audioSamples.count) samples (\(String(format: "%.2f", duration))s)")
 
-    let audioSamples = audio.squeezed().asArray(Float.self)
-    let duration = Float(audioSamples.count) / 24000.0
-    print("  Audio: \(audioSamples.count) samples (\(String(format: "%.2f", duration))s)")
-
-    // Save to test_audio folder for easy comparison with Python (E2E Step 9)
-    let outputPath = URL(fileURLWithPath: "\(PROJECT_ROOT)/test_audio/e2e_step9_swift.wav")
-    try writeWAV(audio: audioSamples, sampleRate: 24000, to: outputPath)
-    print("  ✅ Saved: \(outputPath.path)")
+// Frequency analysis to verify correct output
+var lowEnergy: Float = 0
+var highEnergy: Float = 0
+let sampleRate: Float = 24000
+for freq in stride(from: 100, through: 500, by: 50) {
+    var realSum: Float = 0, imagSum: Float = 0
+    for (i, sample) in audioSamples.enumerated() {
+        let angle = 2.0 * Float.pi * Float(freq) * Float(i) / sampleRate
+        realSum += sample * cos(angle)
+        imagSum += sample * sin(angle)
+    }
+    lowEnergy += sqrt(realSum * realSum + imagSum * imagSum)
 }
+for freq in stride(from: 5000, through: 10000, by: 500) {
+    var realSum: Float = 0, imagSum: Float = 0
+    for (i, sample) in audioSamples.enumerated() {
+        let angle = 2.0 * Float.pi * Float(freq) * Float(i) / sampleRate
+        realSum += sample * cos(angle)
+        imagSum += sample * sin(angle)
+    }
+    highEnergy += sqrt(realSum * realSum + imagSum * imagSum)
+}
+let totalEnergy = lowEnergy + highEnergy
+print("  Frequency analysis:")
+print("    Low freq (100-500 Hz): \(String(format: "%.1f", 100 * lowEnergy / totalEnergy))%")
+print("    High freq (5k-10k Hz): \(String(format: "%.1f", 100 * highEnergy / totalEnergy))%")
+if lowEnergy > highEnergy {
+    print("    ✅ Correct: Low frequency dominant (speech)")
+} else {
+    print("    ⚠️  Warning: High frequency dominant (possible frequency inversion)")
+}
+
+// Save to test_audio folder
+let outputPath = URL(fileURLWithPath: "\(PROJECT_ROOT)/test_audio/swift_output.wav")
+try writeWAV(audio: audioSamples, sampleRate: 24000, to: outputPath)
+print("  ✅ Saved: \(outputPath.path)")
 
 print("\n" + String(repeating: "=", count: 80))
 print("✅ AUDIO GENERATION COMPLETE!")
-print("   Output directory: \(outputDir.path)")
+print("   Output: \(outputPath.path)")
 print(String(repeating: "=", count: 80))
