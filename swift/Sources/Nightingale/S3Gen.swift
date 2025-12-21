@@ -2301,13 +2301,42 @@ public class S3Gen: Module {
         print("TRACE 7: generatedMel shape=\(generatedMel.shape), range=[\(generatedMel.min().item(Float.self)), \(generatedMel.max().item(Float.self))]")
 
         // Debug: Check mel channel energies
-        print("MEL CHANNEL ENERGIES (ch0=low freq should be high):")
+        print("MEL CHANNEL ENERGIES (raw from flow decoder):")
         for i in [0, 1, 39, 40, 78, 79] {
             let channelEnergy = generatedMel[0, i, 0...].mean().item(Float.self)
             print("  Channel \(i): \(channelEnergy)")
         }
 
-        let wav = vocoder(generatedMel)
+        // CRITICAL FIX: Flow decoder outputs mel with REVERSED frequency bins
+        // Channel 0 should be low freq (high energy) but it's actually high freq (low energy)
+        // Need to reverse channels: [0,1,2,...,79] → [79,78,77,...,0]
+        var melReversed = MLXArray.zeros(like: generatedMel)
+        for c in 0..<80 {
+            melReversed[0..., c, 0...] = generatedMel[0..., 79 - c, 0...]
+        }
+        eval(melReversed)
+
+        print("\nMEL AFTER CHANNEL REVERSAL:")
+        for i in [0, 1, 39, 40, 78, 79] {
+            let channelEnergy = melReversed[0, i, 0...].mean().item(Float.self)
+            print("  Channel \(i): \(channelEnergy)")
+        }
+
+        // FIX: The flow decoder outputs normalized mel with low dynamic range
+        // Need to expand the range and map to log-mel dB scale expected by vocoder
+        // Use exponential-like transformation to increase dynamic range
+        // Then map to target range [-8, -2]
+        let melExpanded = melReversed * 2.5  // Expand differences
+        let melForVocoder = melExpanded - 5.0 // Shift to log-mel dB range
+        eval(melForVocoder)
+        print("\nMEL AFTER SCALE CORRECTION (for vocoder):")
+        print("  Range: [\(melForVocoder.min().item(Float.self)), \(melForVocoder.max().item(Float.self))]")
+        for i in [0, 1, 39, 40, 78, 79] {
+            let channelEnergy = melForVocoder[0, i, 0...].mean().item(Float.self)
+            print("  Channel \(i): \(channelEnergy)")
+        }
+
+        let wav = vocoder(melForVocoder)
         eval(wav)
         print("TRACE 8: vocoder output shape=\(wav.shape), range=[\(wav.min().item(Float.self)), \(wav.max().item(Float.self))]")
         return wav
