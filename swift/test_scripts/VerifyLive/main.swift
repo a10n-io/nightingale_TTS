@@ -643,6 +643,23 @@ func loadS3GenModel() throws -> S3Gen {
         print("  Loading Python flow decoder weights..."); fflush(stdout)
         let pythonFlow = try MLX.loadArrays(url: pythonFlowURL)
         print("  Python flow weights loaded (\(pythonFlow.count) arrays)"); fflush(stdout)
+
+        // DEBUG: Check what the key mapping does for the specific FF key
+        let testKey = "decoder.mid_blocks_11.transformer_3.ff.layers.0.weight"
+        if let testValue = pythonFlow[testKey] {
+            print("  🔍 DEBUG: Found key '\(testKey)' with shape \(testValue.shape)")
+            if let remappedKey = remapS3Key(testKey) {
+                print("  🔍 DEBUG: Remapped to '\(remappedKey)'")
+            } else {
+                print("  🔍 DEBUG: Key was filtered (returned nil)")
+            }
+        } else {
+            print("  🔍 DEBUG: Key '\(testKey)' NOT found in python_flow_weights")
+            // Print first few keys to see what format they have
+            let firstKeys = pythonFlow.keys.sorted().prefix(5)
+            print("  🔍 DEBUG: First 5 keys: \(firstKeys)")
+        }
+
         let remappedFlow = remapS3Keys(pythonFlow)
         print("  Python flow weights remapped"); fflush(stdout)
         let flowParams = ModuleParameters.unflattened(remappedFlow)
@@ -651,6 +668,28 @@ func loadS3GenModel() throws -> S3Gen {
         print("  Applied \(pythonFlow.count) Python decoder weights, forcing eval..."); fflush(stdout)
         eval(s3gen)  // Force evaluation
         print("  ✅ Python decoder weights evaluated successfully"); fflush(stdout)
+
+        // DEBUG: Check mid_blocks.11.transformers.3.ff weights
+        let ffLayers = s3gen.decoder.midBlocks[11].transformers[3].ff.layers
+        let l0w = ffLayers[0].weight
+        let l1w = ffLayers[1].weight
+        eval(l0w); eval(l1w)
+        print("  🔍 DEBUG: mid[11].tfmr[3].ff.layers[0].weight: shape=\(l0w.shape), range=[\(l0w.min().item(Float.self)), \(l0w.max().item(Float.self))]")
+        print("  🔍 DEBUG: mid[11].tfmr[3].ff.layers[1].weight: shape=\(l1w.shape), range=[\(l1w.min().item(Float.self)), \(l1w.max().item(Float.self))]")
+        // Check first few values
+        let l0w_flat = l0w.flattened()
+        print("  🔍 DEBUG: layers[0].weight[:5]: \(l0w_flat[0..<5].asArray(Float.self))")
+
+        // Check attention out_proj bias values
+        let attn = s3gen.decoder.downBlocks[0].transformers[0].attention
+        if let outBias = attn.outProj.bias {
+            eval(outBias)
+            print("  🔍 DEBUG: down[0].tfmr[0].attn.outProj.bias: shape=\(outBias.shape)")
+            print("  🔍 DEBUG:   first 5: \(outBias[0..<5].asArray(Float.self))")
+            print("  🔍 DEBUG:   Expected: [-0.0112, -0.0052, 0.0163, 0.00269, 0.00432]")
+        } else {
+            print("  ⚠️ WARNING: attn.outProj.bias is nil!")
+        }
     } else {
         print("  Python flow decoder weights NOT FOUND at \(pythonFlowURL.path)"); fflush(stdout)
     }
@@ -1880,67 +1919,33 @@ func runVerification(voiceName: String, refDirOverride: String?) throws {
             print("DEBUG: Printed SKIPPED message"); fflush(stdout)
             //print("  mask_T: \(maskTShape)")
 
-            // Prepare speaker embedding (normalized and projected)
-            print("DEBUG: About to assign soul_s3 to spkEmbFor7a"); fflush(stdout)
-            var spkEmbFor7a = soul_s3
-            print("DEBUG: Assigned, checking ndim"); fflush(stdout)
-            if spkEmbFor7a.ndim == 1 { spkEmbFor7a = spkEmbFor7a.expandedDimensions(axis: 0) }
-            print("DEBUG: After ndim check"); fflush(stdout)
+            // Use Python reference spk_emb for Step 7a to isolate decoder testing
+            // This ensures we test ONLY the decoder, not the spk_emb projection
+            let refSpkEmb7a = try NPYLoader.load(contentsOf: verifyURL.appendingPathComponent("step5_spk_emb.npy"))
+            print("Loaded refSpkEmb7a for Step 7a: \(refSpkEmb7a.shape)"); fflush(stdout)
+            print("  refSpkEmb7a[:5]: \(refSpkEmb7a[0, 0..<5])"); fflush(stdout)
 
-            // GHOST HUNT: Check all tensor shapes BEFORE any computation
-            print("\n🔍 GHOST HUNT: Checking tensor shapes before spkEmbProj7a computation..."); fflush(stdout)
-            print("  soul_s3 (spkEmbFor7a): \(spkEmbFor7a.shape)"); fflush(stdout)
-            print("  s3gen!.spkEmbedAffine.weight: \(s3gen!.spkEmbedAffine.weight.shape)"); fflush(stdout)
-            print("  s3gen!.spkEmbedAffine.bias: \(s3gen!.spkEmbedAffine.bias!.shape)"); fflush(stdout)
-
-            print("DEBUG: About to compute norm7a"); fflush(stdout)
-            let norm7a = sqrt(sum(spkEmbFor7a * spkEmbFor7a, axis: 1, keepDims: true)) + 1e-8
-            print("DEBUG: Computed norm7a"); fflush(stdout)
-            let spkEmbNorm7a = spkEmbFor7a / norm7a
-            print("  spkEmbNorm7a: \(spkEmbNorm7a.shape)"); fflush(stdout)
-
-            print("DEBUG: About to manually compute matmul..."); fflush(stdout)
-            let matmulResult = matmul(spkEmbNorm7a, s3gen!.spkEmbedAffine.weight)
-            print("DEBUG: matmul done, about to check shape..."); fflush(stdout)
-            print("  matmulResult: \(matmulResult.shape)"); fflush(stdout)
-
-            print("DEBUG: About to add bias..."); fflush(stdout)
-            let spkEmbProj7a = matmulResult + s3gen!.spkEmbedAffine.bias!
-            print("DEBUG: Computed spkEmbProj7a"); fflush(stdout)
-            print("DEBUG: Skipping eval(spkEmbProj7a) to avoid broadcast error"); fflush(stdout)
-            //eval(spkEmbProj7a)  // SKIPPED - triggers broadcast error from deferred operation
-
-            // GHOST HUNT: Test which tensor access triggers the error
-            print("\n🔍 GHOST HUNT: Testing which shape access triggers error..."); fflush(stdout)
-            print("DEBUG: About to access refInitialNoise7a.shape..."); fflush(stdout)
-            let testShape1 = refInitialNoise7a.shape
-            print("  ✅ refInitialNoise7a.shape OK: \(testShape1)"); fflush(stdout)
-
-            print("DEBUG: About to access refMuT.shape..."); fflush(stdout)
-            let testShape2 = refMuT.shape
-            print("  ✅ refMuT.shape OK: \(testShape2)"); fflush(stdout)
-
-            print("DEBUG: About to access spkEmbProj7a.shape..."); fflush(stdout)
-            let testShape3 = spkEmbProj7a.shape
-            print("  ✅ spkEmbProj7a.shape OK: \(testShape3)"); fflush(stdout)
-
-            print("\nSwift inputs:")
-            print("  x (noise): \(testShape1)")
-            print("  mu: \(testShape2)")
-            print("  spk_emb: \(testShape3)")
+            print("\nSwift inputs (all from Python references):")
+            print("  x (noise): \(refInitialNoise7a.shape)")
+            print("  mu: \(refMuT.shape)")
+            print("  spk_emb: \(refSpkEmb7a.shape)")
             print("  cond: \(refCondT.shape)")
             print("  t: 0.0")
 
             // Run single forward pass through decoder at t=0
             let t0 = MLXArray([Float(0.0)])
+
+            // Enable debug mode to trace decoder internals
+            FlowMatchingDecoder.debugStep = 1
             let swiftVelocityT0 = s3gen!.decoder(
                 x: refInitialNoise7a,
                 mu: refMuT,
                 t: t0,
-                speakerEmb: spkEmbProj7a,
+                speakerEmb: refSpkEmb7a,
                 cond: refCondT,
                 mask: refMaskT
             )
+            FlowMatchingDecoder.debugStep = 0
 
             eval(swiftVelocityT0)
 
