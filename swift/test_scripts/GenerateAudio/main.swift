@@ -97,15 +97,29 @@ print(String(repeating: "=", count: 80))
 
 let PROJECT_ROOT = "/Users/a10n/Projects/nightingale_TTS"
 let modelDir = URL(fileURLWithPath: "\(PROJECT_ROOT)/models")
-let outputDir = URL(fileURLWithPath: "\(PROJECT_ROOT)/test_audio")
+let outputDir = URL(fileURLWithPath: "\(PROJECT_ROOT)/test_audio/swift")
 
 try? FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
 
-let texts = [
-    "Hello! This is a test of the Swift text to speech system.",
-    "The quick brown fox jumps over the lazy dog.",
-    "Welcome to Nightingale."
-]
+// Load test sentences from JSON
+struct TestSentence: Codable {
+    let id: String
+    let description: String
+    let text_en: String
+    let text_nl: String
+}
+
+let testSentencesURL = URL(fileURLWithPath: "\(PROJECT_ROOT)/E2E/test_sentences.json")
+let testSentencesData = try Data(contentsOf: testSentencesURL)
+let testSentences = try JSONDecoder().decode([TestSentence].self, from: testSentencesData)
+print("Loaded \(testSentences.count) test sentences")
+
+// Timestamp for file naming
+let dateFormatter = DateFormatter()
+dateFormatter.dateFormat = "yyyyMMdd_HHmmss"
+let timestamp = dateFormatter.string(from: Date())
+
+let voiceName = "samantha"
 
 print("\nLoading models...")
 
@@ -225,24 +239,34 @@ print("\n" + String(repeating: "=", count: 80))
 print("GENERATING AUDIO")
 print(String(repeating: "=", count: 80))
 
-for (index, text) in texts.enumerated() {
-    print("\n[\(index + 1)/\(texts.count)] \"\(text)\"")
+// Limit to first 2 sentences for faster QA
+let limitedSentences = Array(testSentences.prefix(2))
+let totalSamples = limitedSentences.count
+var generated = 0
+
+for sentence in limitedSentences {
+    generated += 1
+    let text = sentence.text_en
+    let lang = "en"
+
+    print("\n[\(generated)/\(totalSamples)] [\(sentence.id)][\(lang)] \(sentence.description)")
+    print("  Text: \(text.prefix(60))\(text.count > 60 ? "..." : "")")
 
     // Tokenize
     let normalized = normalizeTextForTokenizer(text)
-    var tokens = tokenize(normalized, vocab: vocab, merges: merges, languageId: "en")
+    var tokens = tokenize(normalized, vocab: vocab, merges: merges, languageId: lang)
     if let sotToken = vocab["<|startoftranscript|>"] { tokens.insert(sotToken, at: 0) }
     if let eotToken = vocab["<|endoftranscript|>"] { tokens.append(eotToken) }
     let textTokens = MLXArray(tokens.map { Int32($0) }).expandedDimensions(axis: 0)
     print("  Tokens: \(tokens.count)")
 
-    // T3 Generation
+    // T3 Generation - match Python parameters
     print("  Generating speech tokens...")
     let speechTokensRaw = t3.generate(
         textTokens: textTokens,
         speakerEmb: speakerEmb,
         condTokens: condTokens,
-        maxTokens: 800,
+        maxTokens: 1000,
         temperature: 0.8,
         emotionValue: emotionAdv[0, 0].item(Float.self),
         cfgWeight: 0.5,
@@ -271,9 +295,11 @@ for (index, text) in texts.enumerated() {
     let duration = Float(audioSamples.count) / 24000.0
     print("  Audio: \(audioSamples.count) samples (\(String(format: "%.2f", duration))s)")
 
-    let outputPath = outputDir.appendingPathComponent("swift_audio_\(index + 1).wav")
+    // Save with naming convention: swift_{voice}_{id}_{lang}_{timestamp}.wav
+    let filename = "swift_\(voiceName)_\(sentence.id)_\(lang)_\(timestamp).wav"
+    let outputPath = outputDir.appendingPathComponent(filename)
     try writeWAV(audio: audioSamples, sampleRate: 24000, to: outputPath)
-    print("  ✅ Saved: \(outputPath.path)")
+    print("  ✅ Saved: \(filename)")
 }
 
 print("\n" + String(repeating: "=", count: 80))

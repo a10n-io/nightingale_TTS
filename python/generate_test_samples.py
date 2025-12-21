@@ -15,7 +15,7 @@ from chatterbox.mtl_tts import ChatterboxMultilingualTTS
 PROJECT_ROOT = Path("/Users/a10n/Projects/nightingale_TTS")
 MODEL_DIR = PROJECT_ROOT / "models" / "chatterbox"
 VOICE_DIR = PROJECT_ROOT / "baked_voices"
-OUTPUT_DIR = PROJECT_ROOT / "test_audio"
+OUTPUT_DIR = PROJECT_ROOT / "test_audio" / "python"
 TEST_SENTENCES = PROJECT_ROOT / "E2E" / "test_sentences.json"
 
 # Automatically detect the best available device
@@ -59,6 +59,8 @@ def generate_samples(voice_name: str, languages: list = ["en", "nl"]):
     OUTPUT_DIR.mkdir(exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
+    # Limit to first 2 sentences for faster QA
+    sentences = sentences[:2]
     print(f"\nGenerating {len(sentences)} samples for {len(languages)} languages...\n")
 
     for sentence in sentences:
@@ -84,7 +86,7 @@ def generate_samples(voice_name: str, languages: list = ["en", "nl"]):
             )
 
             # Save with descriptive filename
-            filename = f"{voice_name}_{sentence_id}_{lang}_{timestamp}.wav"
+            filename = f"python_{voice_name}_{sentence_id}_{lang}_{timestamp}.wav"
             output_path = OUTPUT_DIR / filename
             ta.save(str(output_path), wav, model.sr)
             print(f"  ✓ Saved: {filename}\n")
