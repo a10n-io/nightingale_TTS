@@ -324,9 +324,41 @@ def generate_python_reference(model, test_case: TestCase, device: str, max_step:
     mask = torch.ones(1, total_len, dtype=torch.int32, device=device)  # Use int32 for Swift NPY loader compatibility
     outputs["step5_mask"] = mask.detach().cpu().numpy().astype(np.int32)
 
-    # Steps 6-8: DISABLED FOR NOW - Will add after Steps 1-5 working
+    if max_step < 6:
+        return outputs
+
+    # =========================================================================
     # Step 6: S3Gen Encoder
-    # Step 7: Full ODE generation
+    # =========================================================================
+    # Apply mask to token embeddings (as done in actual inference)
+    mask_float = mask.unsqueeze(-1).float()  # [1, T, 1]
+    token_emb_masked = token_emb * mask_float
+
+    # Token length tensor for encoder
+    token_len = torch.tensor([total_len], dtype=torch.long, device=device)
+
+    # Run encoder
+    encoder_out, encoder_masks = model.s3gen.flow.encoder(token_emb_masked, token_len)
+    outputs["step6_encoder_out"] = encoder_out.detach().cpu().numpy()
+
+    # Project to mel dimension
+    encoder_proj = model.s3gen.flow.encoder_proj(encoder_out)
+
+    # Prepare mu (transposed for decoder) - shape [B, 80, T_up]
+    mu = encoder_proj.transpose(1, 2).contiguous()
+    outputs["step6_mu"] = mu.detach().cpu().numpy()
+
+    # Prepare x_cond from prompt_feat
+    # The conditioning is prompt_feat for the first mel_len1 frames, zeros for the rest
+    mel_len1 = prompt_feat.shape[1]  # prompt mel length
+    mel_len2 = encoder_out.shape[1] - mel_len1  # generated mel length
+    x_cond = torch.zeros([1, mel_len1 + mel_len2, 80], device=device, dtype=encoder_proj.dtype)
+    x_cond[:, :mel_len1] = prompt_feat
+    x_cond = x_cond.transpose(1, 2).contiguous()  # [B, 80, T_up]
+    outputs["step6_x_cond"] = x_cond.detach().cpu().numpy()
+
+    # Steps 7-8: TODO
+    # Step 7: ODE Solver / Flow Matching decoder
     # Step 8: Vocoder
 
     return outputs

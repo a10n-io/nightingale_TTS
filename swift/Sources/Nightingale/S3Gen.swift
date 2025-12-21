@@ -142,6 +142,8 @@ public class TimeMLP: Module {
     public let linear2: FixedLinear
     let inputDim: Int
 
+    public static var debugEnabled: Bool = false
+
     public init(inputDim: Int = 320, embDim: Int = 1024) {
         self.inputDim = inputDim
         self.linear1 = FixedLinear(inputDim, embDim, name: "TimeMLP.linear1")
@@ -151,7 +153,47 @@ public class TimeMLP: Module {
 
     public func callAsFunction(_ t: MLXArray) -> MLXArray {
         let emb = sinusoidalEmbedding(t, dim: inputDim)
-        return linear2(silu(linear1(emb)))
+
+        if TimeMLP.debugEnabled {
+            eval(emb)
+            print("TimeMLP sinusoidal embedding:"); fflush(stdout)
+            print("  shape: \(emb.shape)"); fflush(stdout)
+            print("  min/max: [\(emb.min().item(Float.self)), \(emb.max().item(Float.self))]"); fflush(stdout)
+            print("  first 10: \(emb[0, 0..<10].asArray(Float.self))"); fflush(stdout)
+            print("  last 10: \(emb[0, emb.shape[1]-10..<emb.shape[1]].asArray(Float.self))"); fflush(stdout)
+        }
+
+        let afterLinear1 = linear1(emb)
+        if TimeMLP.debugEnabled {
+            eval(afterLinear1)
+            print("TimeMLP after Linear 1:"); fflush(stdout)
+            print("  shape: \(afterLinear1.shape)"); fflush(stdout)
+            print("  min/max: [\(afterLinear1.min().item(Float.self)), \(afterLinear1.max().item(Float.self))]"); fflush(stdout)
+            print("  first 5: \(afterLinear1[0, 0..<5].asArray(Float.self))"); fflush(stdout)
+            print("  linear1.weight[0,:5]: \(linear1.weight[0, 0..<5].asArray(Float.self))"); fflush(stdout)
+            if let b = linear1.bias { print("  linear1.bias[:5]: \(b[0..<5].asArray(Float.self))"); fflush(stdout) }
+        }
+
+        let afterSiLU = silu(afterLinear1)
+        if TimeMLP.debugEnabled {
+            eval(afterSiLU)
+            print("TimeMLP after SiLU:"); fflush(stdout)
+            print("  min/max: [\(afterSiLU.min().item(Float.self)), \(afterSiLU.max().item(Float.self))]"); fflush(stdout)
+            print("  first 5: \(afterSiLU[0, 0..<5].asArray(Float.self))"); fflush(stdout)
+        }
+
+        let result = linear2(afterSiLU)
+        if TimeMLP.debugEnabled {
+            eval(result)
+            print("TimeMLP after Linear 2:"); fflush(stdout)
+            print("  shape: \(result.shape)"); fflush(stdout)
+            print("  min/max: [\(result.min().item(Float.self)), \(result.max().item(Float.self))]"); fflush(stdout)
+            print("  first 5: \(result[0, 0..<5].asArray(Float.self))"); fflush(stdout)
+            print("  linear2.weight[0,:5]: \(linear2.weight[0, 0..<5].asArray(Float.self))"); fflush(stdout)
+            if let b = linear2.bias { print("  linear2.bias[:5]: \(b[0..<5].asArray(Float.self))"); fflush(stdout) }
+        }
+
+        return result
     }
 
     private func sinusoidalEmbedding(_ t: MLXArray, dim: Int, scale: Float = 1000.0) -> MLXArray {
@@ -220,13 +262,24 @@ public class MultiHeadAttention: Module {
         super.init()
     }
     
+    public static var debugEnabled: Bool = false
+    public static var debugId: String = ""
+
     public func callAsFunction(_ x: MLXArray, mask: MLXArray? = nil) -> MLXArray {
         let B = x.shape[0]
         let L = x.shape[1]
+        let debug = MultiHeadAttention.debugEnabled
 
         var q = queryProj(x)
         var k = keyProj(x)
         var v = valueProj(x)
+
+        if debug {
+            eval(q); eval(k); eval(v)
+            print("  ATTN[\(MultiHeadAttention.debugId)] Q: [\(q.min().item(Float.self)), \(q.max().item(Float.self))]")
+            print("  ATTN[\(MultiHeadAttention.debugId)] K: [\(k.min().item(Float.self)), \(k.max().item(Float.self))]")
+            print("  ATTN[\(MultiHeadAttention.debugId)] V: [\(v.min().item(Float.self)), \(v.max().item(Float.self))]")
+        }
 
         // Reshape to (B, numHeads, L, headDim) for scaled dot product attention
         q = q.reshaped([B, L, numHeads, headDim]).transposed(0, 2, 1, 3)
@@ -236,16 +289,40 @@ public class MultiHeadAttention: Module {
         // Manual attention computation to match Python's DiffusersAttention when mask is provided
         // Python uses manual attention (not fast path) when attention_mask is not None
         var scores = matmul(q, k.transposed(0, 1, 3, 2)) * scale
+
+        if debug {
+            eval(scores)
+            print("  ATTN[\(MultiHeadAttention.debugId)] scores (before mask): [\(scores.min().item(Float.self)), \(scores.max().item(Float.self))]")
+        }
+
         if let m = mask {
             // Additive bias mask: broadcast m to [B, numHeads, L, L]
             // m is expected to be [B, 1, L, L] or [L, L] or similar
             scores = scores + m
         }
         let probs = softmax(scores, axis: -1)
+
+        if debug {
+            eval(probs)
+            print("  ATTN[\(MultiHeadAttention.debugId)] probs: [\(probs.min().item(Float.self)), \(probs.max().item(Float.self))]")
+        }
+
         var output = matmul(probs, v)
 
+        if debug {
+            eval(output)
+            print("  ATTN[\(MultiHeadAttention.debugId)] output (before reshape): [\(output.min().item(Float.self)), \(output.max().item(Float.self))]")
+        }
+
         output = output.transposed(0, 2, 1, 3).reshaped([B, L, numHeads * headDim])
-        return outProj(output)
+        let result = outProj(output)
+
+        if debug {
+            eval(result)
+            print("  ATTN[\(MultiHeadAttention.debugId)] result (after outProj): [\(result.min().item(Float.self)), \(result.max().item(Float.self))]")
+        }
+
+        return result
     }
 }
 
@@ -1046,6 +1123,11 @@ public class FlowTransformerBlock: Module {
             eval(h); print("TFMR[\(FlowTransformerBlock.debugBlockId),\(FlowTransformerBlock.debugTfmrId)] after res1: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]")
         }
         let res2 = h
+        if FlowTransformerBlock.debugEnabled && FlowTransformerBlock.debugBlockId == 0 && FlowTransformerBlock.debugTfmrId == 0 {
+            if let w = norm2.weight { print("TFMR[0,0] norm2 weights: \(w[0..<3].asArray(Float.self))") }
+            if let b = norm2.bias { print("TFMR[0,0] norm2 bias: \(b[0..<3].asArray(Float.self))") }
+            print("TFMR[0,0] res2 (norm2 input): [\(res2.min().item(Float.self)), \(res2.max().item(Float.self))]")
+        }
         h = norm2(h)
         if FlowTransformerBlock.debugEnabled {
             eval(h); print("TFMR[\(FlowTransformerBlock.debugBlockId),\(FlowTransformerBlock.debugTfmrId)] after norm2: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]")
@@ -1259,13 +1341,18 @@ public class FlowMatchingDecoder: Module {
             if debug && ti == 0 {
                 let h_normed = tfmr.norm1(h); eval(h_normed)
                 print("DEC tfmr.norm1: [\(h_normed.min().item(Float.self)), \(h_normed.max().item(Float.self))]")
+                // Enable detailed attention debug for first transformer
+                MultiHeadAttention.debugEnabled = true
+                MultiHeadAttention.debugId = "down.tfmr[0]"
                 let attn_out = tfmr.attention(h_normed, mask: attnMask); eval(attn_out)
+                MultiHeadAttention.debugEnabled = false
                 print("DEC tfmr.attn: [\(attn_out.min().item(Float.self)), \(attn_out.max().item(Float.self))]")
             }
             h = tfmr(h, mask: attnMask)
+            if debug { eval(h); print("DEC down.tfmr[\(ti)]: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]") }
         }
         h = h.transposed(0, 2, 1)
-        if debug { eval(h); print("DEC after down.tfmrs: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]") }
+        if debug { eval(h); print("DEC after down.tfmrs (transposed): [\(h.min().item(Float.self)), \(h.max().item(Float.self))]") }
         let skip = h
         // Downsample: Do NOT multiply activations by mask (mask is only for attention)
         if let dl = down.downLayer {
