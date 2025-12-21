@@ -324,15 +324,30 @@ public actor ChatterboxEngine {
         print("S3Gen initialized and set to eval mode")
 
         // Load tokenizer vocab and BPE merges
-        let tokenizerURL = modelDir.appendingPathComponent("tokenizer.json")
+        // Prefer multilingual tokenizer (has [en], [fr], etc. as single tokens)
+        // Fall back to English-only tokenizer
+        let mtlTokenizerURL = modelDir.appendingPathComponent("grapheme_mtl_merged_expanded_v1.json")
+        let enTokenizerURL = modelDir.appendingPathComponent("tokenizer.json")
+
+        let tokenizerURL: URL
+        if FileManager.default.fileExists(atPath: mtlTokenizerURL.path) {
+            tokenizerURL = mtlTokenizerURL
+            print("Loading multilingual tokenizer...")
+        } else if FileManager.default.fileExists(atPath: enTokenizerURL.path) {
+            tokenizerURL = enTokenizerURL
+            print("Loading English-only tokenizer...")
+        } else {
+            print("Warning: No tokenizer found")
+            tokenizerURL = enTokenizerURL  // Will fail below but with clear error
+        }
+
         if FileManager.default.fileExists(atPath: tokenizerURL.path) {
-            print("Loading tokenizer...")
             let (vocabDict, merges) = try loadVocab(from: tokenizerURL)
             self.vocab = vocabDict
             self.bpeMerges = merges
             print("Tokenizer loaded: \(vocab?.count ?? 0) tokens, \(merges.count) BPE merges")
         } else {
-            print("Warning: Tokenizer not found")
+            print("Warning: Tokenizer file not found: \(tokenizerURL.lastPathComponent)")
         }
 
         isLoaded = true
@@ -852,11 +867,17 @@ public actor ChatterboxEngine {
 
         var tokens: [Int] = []
 
-        // Add language token at start (e.g., [en] = token 708)
-        // Python tokenizer prepends "[en]" to text before encoding
-        let langToken = "[\(languageId.lowercased())]"
-        if let langTokenId = vocab[langToken] {
+        // Python MTLTokenizer prepends "[{language_id}]" before BPE encoding.
+        // In multilingual vocab (2454 tokens), [en] exists as token 708.
+        // In English-only vocab (704 tokens), [en] doesn't exist and must be BPE-encoded.
+        let langTag = "[\(languageId.lowercased())]"
+        if let langTokenId = vocab[langTag] {
+            // Multilingual vocab: [en] = 708, [fr] = 712, etc.
             tokens.append(langTokenId)
+        } else {
+            // English-only vocab: BPE encode "[en]" as 3 tokens: '[' (303), 'en' (50), ']' (305)
+            let langTokens = bpeEncode(word: langTag, vocab: vocab, merges: merges)
+            tokens.append(contentsOf: langTokens)
         }
 
         // Lowercase text - Python's tokenizer does this by default

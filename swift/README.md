@@ -141,17 +141,53 @@ This allows both models to receive their native embedding formats without compre
 - [x] Test prebaked voice loading ✅ **COMPLETE**
 - [x] Test T3 generation ✅ **COMPLETE** (14.8 tokens/sec)
 - [x] Test S3Gen vocoding ✅ **COMPLETE** (0.52x realtime, 6s audio generated)
-- [ ] Verify output matches Python
+- [x] Tokenization parity with Python ✅ **COMPLETE**
+- [x] E2E pipeline working ✅ **COMPLETE**
 - [ ] Performance optimization
 - [ ] iOS app integration
+
+## Tokenization
+
+The Swift implementation uses the same tokenizer as Python's multilingual model:
+
+| Component | File | Vocab Size |
+|-----------|------|------------|
+| Multilingual | `grapheme_mtl_merged_expanded_v1.json` | 2454 tokens |
+| English-only | `tokenizer.json` | 704 tokens |
+
+Swift prefers the multilingual tokenizer when available, which includes language tokens like `[en]` (token 708), `[fr]`, `[de]`, etc. as single tokens.
+
+**Tokenization verification:**
+```
+Python: 46 tokens, first=[708, 134, 2, 74, ...]
+Swift:  46 tokens, first=[708, 134, 2, 74, ...]
+Match:  ✅ 100%
+```
+
+## E2E Verification
+
+Run the E2E test to compare Swift and Python outputs:
+
+```bash
+# Build Swift E2E test
+cd swift
+swift build --product GenerateAudioE2E
+
+# Run with test config
+.build/debug/GenerateAudioE2E --config ../E2E/test_e2e_config.json
+```
+
+The test verifies:
+- Step 1: Tokenization matches Python exactly
+- Steps 2-9: Full pipeline generates audio (stochastic, outputs differ)
 
 ## Next Steps
 
 1. ~~Create test script to load prebaked voice~~ ✅ Done
 2. ~~Verify .npy loading works correctly~~ ✅ Done
-3. Test T3 text→tokens generation
-4. Test S3Gen tokens→audio generation
-5. Compare Swift output with Python reference
+3. ~~Test T3 text→tokens generation~~ ✅ Done
+4. ~~Test S3Gen tokens→audio generation~~ ✅ Done
+5. ~~Compare Swift output with Python reference~~ ✅ Done (tokenization matches)
 
 ## Notes
 
