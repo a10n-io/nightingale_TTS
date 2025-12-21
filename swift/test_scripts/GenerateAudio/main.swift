@@ -89,6 +89,67 @@ func tokenize(_ text: String, vocab: [String: Int], merges: [(String, String)], 
     return result
 }
 
+// MARK: - T3 Key Remapping
+
+func remapT3Key(_ key: String) -> String? {
+    var k = key
+    if k.hasPrefix("t3.") { k = String(k.dropFirst("t3.".count)) }
+    if k.hasPrefix("s3gen.") || k.hasPrefix("ve.") { return nil }
+
+    if k.hasPrefix("tfmr.layers.") {
+        k = String(k.dropFirst("tfmr.".count))
+    } else if k.hasPrefix("tfmr.model.") {
+        k = String(k.dropFirst("tfmr.model.".count))
+        if k.hasPrefix("embed_tokens") { return nil }
+    } else if k == "tfmr.norm.weight" {
+        k = "norm.weight"
+    } else if k.hasPrefix("tfmr.") {
+        return nil
+    }
+
+    if k.hasPrefix("cond_enc.") {
+        if k.hasPrefix("cond_enc.spkr_enc.") {
+            return k.replacingOccurrences(of: "cond_enc.spkr_enc", with: "speakerProj")
+        }
+        if k.hasPrefix("cond_enc.perceiver.") {
+            return k.replacingOccurrences(of: "cond_enc.perceiver", with: "perceiver")
+        }
+        if k.hasPrefix("cond_enc.emotion_adv_fc.") {
+            return k.replacingOccurrences(of: "cond_enc.emotion_adv_fc", with: "emotionAdvFC")
+        }
+        return nil
+    }
+
+    k = k.replacingOccurrences(of: "self_attn", with: "selfAttn")
+    k = k.replacingOccurrences(of: "q_proj", with: "qProj")
+    k = k.replacingOccurrences(of: "k_proj", with: "kProj")
+    k = k.replacingOccurrences(of: "v_proj", with: "vProj")
+    k = k.replacingOccurrences(of: "o_proj", with: "oProj")
+    k = k.replacingOccurrences(of: "input_layernorm", with: "inputLayernorm")
+    k = k.replacingOccurrences(of: "post_attention_layernorm", with: "postAttentionLayernorm")
+    k = k.replacingOccurrences(of: "gate_proj", with: "gateProj")
+    k = k.replacingOccurrences(of: "up_proj", with: "upProj")
+    k = k.replacingOccurrences(of: "down_proj", with: "downProj")
+    k = k.replacingOccurrences(of: "text_emb", with: "textEmb")
+    k = k.replacingOccurrences(of: "speech_emb", with: "speechEmb")
+    k = k.replacingOccurrences(of: "text_head", with: "textHead")
+    k = k.replacingOccurrences(of: "speech_head", with: "speechHead")
+    k = k.replacingOccurrences(of: "text_pos_emb.emb", with: "textPosEmb.embedding")
+    k = k.replacingOccurrences(of: "speech_pos_emb.emb", with: "speechPosEmb.embedding")
+
+    return k
+}
+
+func remapT3Keys(_ weights: [String: MLXArray]) -> [String: MLXArray] {
+    var remapped: [String: MLXArray] = [:]
+    for (key, value) in weights {
+        if let newKey = remapT3Key(key) {
+            remapped[newKey] = value
+        }
+    }
+    return remapped
+}
+
 // MARK: - Main
 
 print(String(repeating: "=", count: 80))
@@ -128,12 +189,14 @@ let tokenizerURL = URL(fileURLWithPath: "\(PROJECT_ROOT)/models/chatterbox/graph
 let (vocab, merges) = try loadTokenizer(from: tokenizerURL)
 print("  ✅ Tokenizer loaded (\(vocab.count) tokens)")
 
-// Load T3 model
+// Load T3 model - use weights-based init to get InspectableTransformerBlocks
 let t3URL = modelDir.appendingPathComponent("mlx/t3_fp32.safetensors")
-let t3Weights = try MLX.loadArrays(url: t3URL)
-let t3 = T3Model(config: T3Config.default)
-let t3Params = ModuleParameters.unflattened(t3Weights)
-t3.update(parameters: t3Params)
+let t3RawWeights = try MLX.loadArrays(url: t3URL)
+let t3Weights = remapT3Keys(t3RawWeights)  // Remap Python key names to Swift
+print("  Remapped \(t3Weights.count) T3 weights")
+// Also load pre-computed RoPE frequencies for exact Python match
+let ropeURL = modelDir.appendingPathComponent("mlx/rope_freqs.npy")
+let t3 = T3Model(config: T3Config.default, weights: t3Weights, ropeFreqsURL: ropeURL)
 eval(t3)
 print("  ✅ T3 model loaded")
 
@@ -236,20 +299,24 @@ let speechEmbMatrix = t3.speechEmb.weight
 eval(speechEmbMatrix)
 
 print("\n" + String(repeating: "=", count: 80))
-print("GENERATING AUDIO")
+print("GENERATING AUDIO (E2E Step 9)")
 print(String(repeating: "=", count: 80))
 
-// Limit to first 2 sentences for faster QA
-let limitedSentences = Array(testSentences.prefix(2))
-let totalSamples = limitedSentences.count
+// Set deterministic seed to match Python (SEED = 42)
+MLXRandom.seed(42)
+
+// QUICK TEST: Use exact same text as Python for comparison
+let testText = "Do you think the model can handle the rising intonation at the end of this sentence?"
+let limitedSentences = [testSentences[0]]  // Just need one for iteration
+let totalSamples = 1
 var generated = 0
 
 for sentence in limitedSentences {
     generated += 1
-    let text = sentence.text_en
+    let text = testText  // Override with fixed text
     let lang = "en"
 
-    print("\n[\(generated)/\(totalSamples)] [\(sentence.id)][\(lang)] \(sentence.description)")
+    print("\n[\(generated)/\(totalSamples)] QUICK TEST")
     print("  Text: \(text.prefix(60))\(text.count > 60 ? "..." : "")")
 
     // Tokenize
@@ -260,18 +327,19 @@ for sentence in limitedSentences {
     let textTokens = MLXArray(tokens.map { Int32($0) }).expandedDimensions(axis: 0)
     print("  Tokens: \(tokens.count)")
 
-    // T3 Generation - match Python parameters
-    print("  Generating speech tokens...")
+    // T3 Generation - DETERMINISTIC settings (matching E2E verify_e2e.py)
+    // This allows direct comparison with Python reference outputs
+    print("  Generating speech tokens (DETERMINISTIC: temp=0.001, topP=1.0, repPenalty=2.0)...")
     let speechTokensRaw = t3.generate(
         textTokens: textTokens,
         speakerEmb: speakerEmb,
         condTokens: condTokens,
-        maxTokens: 1000,
-        temperature: 0.8,
+        maxTokens: 500,
+        temperature: 0.001,  // Near-greedy (E2E test setting)
         emotionValue: emotionAdv[0, 0].item(Float.self),
         cfgWeight: 0.5,
-        repetitionPenalty: 1.05,
-        topP: 0.95,
+        repetitionPenalty: 2.0,  // Aggressive (E2E test setting)
+        topP: 1.0,               // No filtering (E2E test setting)
         minP: 0.05
     )
     var speechTokensClean = speechTokensRaw.filter { $0 != 6561 && $0 != 6562 }
@@ -295,11 +363,10 @@ for sentence in limitedSentences {
     let duration = Float(audioSamples.count) / 24000.0
     print("  Audio: \(audioSamples.count) samples (\(String(format: "%.2f", duration))s)")
 
-    // Save with naming convention: swift_{voice}_{id}_{lang}_{timestamp}.wav
-    let filename = "swift_\(voiceName)_\(sentence.id)_\(lang)_\(timestamp).wav"
-    let outputPath = outputDir.appendingPathComponent(filename)
+    // Save to test_audio folder for easy comparison with Python (E2E Step 9)
+    let outputPath = URL(fileURLWithPath: "\(PROJECT_ROOT)/test_audio/e2e_swift.wav")
     try writeWAV(audio: audioSamples, sampleRate: 24000, to: outputPath)
-    print("  ✅ Saved: \(filename)")
+    print("  ✅ Saved: \(outputPath.path)")
 }
 
 print("\n" + String(repeating: "=", count: 80))
