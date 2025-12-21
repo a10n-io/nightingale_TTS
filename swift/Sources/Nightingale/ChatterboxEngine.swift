@@ -208,11 +208,16 @@ public actor ChatterboxEngine {
             }
             print("Merged flow weights: \(flowWeights.count) total arrays")
 
-            // Load vocoder weights
+            // Skip loading vocoder_weights_python.safetensors when s3gen_fp16.safetensors is used
+            // because s3gen_fp16 already includes all vocoder weights in correct MLX format.
+            // The vocoder_weights_python.safetensors has a different architecture that would break things.
             var vocoderWeights: [String: MLXArray]? = nil
-            if FileManager.default.fileExists(atPath: vocoderURL.path) {
+            let usingFP16 = s3genURL.lastPathComponent == "s3gen_fp16.safetensors"
+            if !usingFP16 && FileManager.default.fileExists(atPath: vocoderURL.path) {
                 vocoderWeights = try MLX.loadArrays(url: vocoderURL)
                 print("Loaded \(vocoderWeights?.count ?? 0) vocoder weight arrays")
+            } else if usingFP16 {
+                print("Skipping vocoder_weights_python.safetensors - s3gen_fp16 already includes vocoder weights")
             }
 
             // Create S3Gen
@@ -220,7 +225,7 @@ public actor ChatterboxEngine {
             // (nn.Linear initializes bias with random values, not zeros)
             MLXRandom.seed(42)
             self.s3gen = S3Gen(flowWeights: flowWeights, vocoderWeights: vocoderWeights)
-            
+
             // Apply updates
             if let s3 = s3gen {
                 let s3Remapped = remapS3Keys(flowWeights)
@@ -236,6 +241,7 @@ public actor ChatterboxEngine {
                 let s3Params = ModuleParameters.unflattened(s3Remapped)
                 s3.update(parameters: s3Params)
 
+                // Only apply vocoder weights if we loaded them separately (not using FP16)
                 if let vw = vocoderWeights {
                      let vRemapped = remapS3Keys(vw)
                      print("Loaded \(vRemapped.count) remapped vocoder weights")
@@ -425,16 +431,50 @@ public actor ChatterboxEngine {
                 var w = value
 
                 // Transpose Linear weights from PyTorch [out, in] to MLX [in, out] format
-                // This applies to all Linear layers in the decoder:
-                // - mlp_linear (ResNet blocks)
+                // This applies to:
+                // - spk_embed_affine_layer (speaker embedding projection)
+                // - encoder_proj (encoder projection)
+                // - decoder Linear layers (mlp_linear, attention projections, feedforward)
                 // - time_mlp.linear_1, time_mlp.linear_2
-                // - attention projections (query_proj, key_proj, value_proj, out_proj)
-                // - feedforward layers (ff.layers.0, ff.layers.1)
+                // - encoder Linear layers (embed.linear, feed_forward.w_1/w_2, self_attn.linear_*)
                 let isDecoderLinear = key.contains("decoder") && key.hasSuffix(".weight") && w.ndim == 2
                 let isTimeMLP = key.contains("time_mlp") && key.contains("linear") && key.hasSuffix(".weight") && w.ndim == 2
+                let isSpkEmbedAffine = key.contains("spk_embed_affine_layer") && key.hasSuffix(".weight") && w.ndim == 2
+                let isEncoderProj = key.contains("encoder_proj") && key.hasSuffix(".weight") && w.ndim == 2
+                // Encoder linear weights: embed.linear, feed_forward.w_1/w_2, self_attn.linear_*
+                let isEncoderLinear = key.contains("encoder") && key.hasSuffix(".weight") && w.ndim == 2 &&
+                                      (key.contains(".linear") || key.contains("feed_forward.w_"))
 
-                if (isDecoderLinear || isTimeMLP) && !key.contains(".conv.") && !key.contains("norm.") {
+                if (isDecoderLinear || isTimeMLP || isSpkEmbedAffine || isEncoderProj || isEncoderLinear) && !key.contains(".conv.") && !key.contains("norm.") {
                     // PyTorch Linear: [out_features, in_features] -> MLX: [in_features, out_features]
+                    w = w.transposed()
+                }
+
+                // Conv1d weight transposition:
+                // - Vocoder weights from vocoder_weights_python.safetensors: PyTorch [out, in, kernel] -> MLX [out, kernel, in]
+                // - Encoder/decoder conv weights: Already in MLX format [out, kernel, in]
+                //
+                // Vocoder prefixes that need transposition:
+                //   conv_pre, conv_post, resblocks, ups (main vocoder)
+                //   f0_predictor (F0 pitch prediction convs)
+                //   source_downs, source_resblocks (source module)
+                let isVocoderConv = (key.hasPrefix("conv_pre") || key.hasPrefix("conv_post") ||
+                                     key.hasPrefix("resblocks") || key.hasPrefix("ups") ||
+                                     key.hasPrefix("f0_predictor") || key.hasPrefix("source_downs") ||
+                                     key.hasPrefix("source_resblocks")) &&
+                                    key.hasSuffix(".weight") && w.ndim == 3
+                if isVocoderConv {
+                    // PyTorch Conv1d: [out_channels, in_channels, kernel_size]
+                    // MLX Conv1d: [out_channels, kernel_size, in_channels]
+                    w = w.transposed(0, 2, 1)
+                }
+
+                // Vocoder Linear weight transposition:
+                // - f0_predictor.classifier.weight: (1, 512) -> (512, 1)
+                // - m_source.l_linear.weight: (1, 9) -> (9, 1)
+                let isVocoderLinear = (key.hasPrefix("f0_predictor.classifier") || key.hasPrefix("m_source.l_linear")) &&
+                                      key.hasSuffix(".weight") && w.ndim == 2
+                if isVocoderLinear {
                     w = w.transposed()
                 }
 
@@ -805,29 +845,39 @@ public actor ChatterboxEngine {
         return result
     }
 
-    public func tokenize(_ text: String) -> [Int] {
+    public func tokenize(_ text: String, languageId: String = "en") -> [Int] {
         guard let vocab = vocab, let merges = bpeMerges else {
             return text.unicodeScalars.map { Int($0.value) % 704 }
         }
 
         var tokens: [Int] = []
 
-        // NOTE: DO NOT add BOS/EOS tokens - Python tokenizer doesn't add them
-        // The T3 model adds start_speech_token (6561) internally during generation
+        // Add language token at start (e.g., [en] = token 708)
+        // Python tokenizer prepends "[en]" to text before encoding
+        let langToken = "[\(languageId.lowercased())]"
+        if let langTokenId = vocab[langToken] {
+            tokens.append(langTokenId)
+        }
+
+        // Lowercase text - Python's tokenizer does this by default
+        let lowercasedText = text.lowercased()
 
         // Pre-tokenize: split on whitespace (as per tokenizer.json pre_tokenizer)
-        let words = text.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+        let words = lowercasedText.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
 
-        for word in words {
+        for (index, word) in words.enumerated() {
             // BPE encode this word
             let wordTokens = bpeEncode(word: word, vocab: vocab, merges: merges)
             tokens.append(contentsOf: wordTokens)
 
-            // DO NOT add space tokens - Python tokenizer doesn't use them
-            // Spaces are implicit in BPE and handled during decoding
+            // Add [SPACE] token (token 2) between words - Python does this!
+            // Python replaces ' ' with '[SPACE]' before encoding
+            if index < words.count - 1 {
+                if let spaceTokenId = vocab["[SPACE]"] {
+                    tokens.append(spaceTokenId)
+                }
+            }
         }
-
-        // NOTE: DO NOT add stop_text_token - Python doesn't add it
 
         return tokens
     }

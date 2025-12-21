@@ -364,7 +364,7 @@ for sentence in limitedSentences {
     print("  Audio: \(audioSamples.count) samples (\(String(format: "%.2f", duration))s)")
 
     // Save to test_audio folder for easy comparison with Python (E2E Step 9)
-    let outputPath = URL(fileURLWithPath: "\(PROJECT_ROOT)/test_audio/e2e_swift.wav")
+    let outputPath = URL(fileURLWithPath: "\(PROJECT_ROOT)/test_audio/e2e_step9_swift.wav")
     try writeWAV(audio: audioSamples, sampleRate: 24000, to: outputPath)
     print("  ✅ Saved: \(outputPath.path)")
 }
