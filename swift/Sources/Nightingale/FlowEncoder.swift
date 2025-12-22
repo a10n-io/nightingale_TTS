@@ -278,23 +278,14 @@ public class PreLookaheadLayer: Module {
 
         super.init()
 
-        // Load weights - PyTorch Conv1d: [out, in, kernel], MLX: [out, kernel, in]
-        // Need to transpose axes 1 and 2
+        // NOTE: conv1 and conv2 weights are loaded later via ChatterboxEngine.update()
+        // DO NOT transpose weights here to avoid double-transpose bug
+        // Conv1d weights will be transposed once in remapS3Keys() and applied via update()
         if let w = weights["\(prefix).conv1.weight"] {
-            let transposed = w.swappedAxes(1, 2)
-            print("  ✅ Loaded \(prefix).conv1.weight: \(w.shape) -> transposed to \(transposed.shape)")
-            conv1.update(parameters: ModuleParameters.unflattened(["weight": transposed]))
-        }
-        if let b = weights["\(prefix).conv1.bias"] {
-            conv1.update(parameters: ModuleParameters.unflattened(["bias": b]))
+            print("  Found \(prefix).conv1.weight: \(w.shape) - will be loaded via ChatterboxEngine.update()")
         }
         if let w = weights["\(prefix).conv2.weight"] {
-            let transposed = w.swappedAxes(1, 2)
-            print("  ✅ Loaded \(prefix).conv2.weight: \(w.shape) -> transposed to \(transposed.shape)")
-            conv2.update(parameters: ModuleParameters.unflattened(["weight": transposed]))
-        }
-        if let b = weights["\(prefix).conv2.bias"] {
-            conv2.update(parameters: ModuleParameters.unflattened(["bias": b]))
+            print("  Found \(prefix).conv2.weight: \(w.shape) - will be loaded via ChatterboxEngine.update()")
         }
     }
 
@@ -337,14 +328,11 @@ public class UpLayer: Module {
 
         super.init()
 
-        // PyTorch Conv1d: [out, in, kernel], MLX: [out, kernel, in]
+        // NOTE: conv weights are loaded later via ChatterboxEngine.update()
+        // DO NOT transpose weights here to avoid double-transpose bug
+        // Conv1d weights will be transposed once in remapS3Keys() and applied via update()
         if let w = weights["\(prefix).conv.weight"] {
-            let transposed = w.swappedAxes(1, 2)
-            print("  ✅ Loaded \(prefix).conv.weight: \(w.shape) -> transposed to \(transposed.shape)")
-            conv.update(parameters: ModuleParameters.unflattened(["weight": transposed]))
-        }
-        if let b = weights["\(prefix).conv.bias"] {
-            conv.update(parameters: ModuleParameters.unflattened(["bias": b]))
+            print("  Found \(prefix).conv.weight: \(w.shape) - will be loaded via ChatterboxEngine.update()")
         }
     }
 

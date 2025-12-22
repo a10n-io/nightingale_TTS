@@ -253,57 +253,26 @@ public class RelPositionMultiHeadAttention: Module {
     }
 
     /// Load weights for relative position attention
-    /// NOTE: All weights MUST be transposed from PyTorch [out, in] to MLX [in, out]
+    /// NOTE: Linear weights are loaded later via ChatterboxEngine.update()
+    /// DO NOT transpose weights here to avoid double-transpose bug
     public func load(weights: [String: MLXArray], prefix: String) {
-        // Load Q, K, V projections (MUST transpose)
+        // NOTE: Q, K, V, Out, and Pos projection weights are loaded via ChatterboxEngine.update()
+        // DO NOT load them here to avoid double-transpose bug
+        // Only verify they exist and log for debugging
         if let w = weights["\(prefix).linear_q.weight"] {
-            queryProj.weight = w.T
-        }
-        if let b = weights["\(prefix).linear_q.bias"] {
-            queryProj.bias = b
+            print("  Found \(prefix).linear_q.weight: \(w.shape) - will be loaded via ChatterboxEngine.update()")
         }
         if let w = weights["\(prefix).linear_k.weight"] {
-            keyProj.weight = w.T
-        }
-        if let b = weights["\(prefix).linear_k.bias"] {
-            keyProj.bias = b
+            print("  Found \(prefix).linear_k.weight: \(w.shape) - will be loaded via ChatterboxEngine.update()")
         }
         if let w = weights["\(prefix).linear_v.weight"] {
-            valueProj.weight = w.T
+            print("  Found \(prefix).linear_v.weight: \(w.shape) - will be loaded via ChatterboxEngine.update()")
         }
-        if let b = weights["\(prefix).linear_v.bias"] {
-            valueProj.bias = b
-        }
-
-        // Load output projection (MUST transpose)
         if let w = weights["\(prefix).linear_out.weight"] {
-            outProj.weight = w.T
+            print("  Found \(prefix).linear_out.weight: \(w.shape) - will be loaded via ChatterboxEngine.update()")
         }
-        if let b = weights["\(prefix).linear_out.bias"] {
-            outProj.bias = b
-        }
-
-        // Load positional projection (no bias) (MUST transpose)
         if let w = weights["\(prefix).linear_pos.weight"] {
-            eval(w)
-            let expectedShape = [dModel, dModel]
-
-            // 🚨 CRITICAL: Guard against shape mismatches BEFORE update
-            if w.shape[0] != expectedShape[0] || w.shape[1] != expectedShape[1] {
-                print("🚨🚨🚨 CAUGHT THE BUG!")
-                print("   Trying to load weight with shape \(w.shape) into linearPos")
-                print("   Expected: [\(dModel), \(dModel)] = [512, 512]")
-                print("   Got: \(w.shape)")
-                fflush(stdout)
-                fatalError("❌ STOP! linear_pos.weight has WRONG SHAPE!")
-            }
-
-            linearPos.weight = w.T
-            print("✅ Loaded \(prefix).linear_pos.weight: \(w.shape) -> transposed")
-            fflush(stdout)
-        } else {
-            print("⚠️  \(prefix).linear_pos.weight not found in weights dict")
-            fflush(stdout)
+            print("  Found \(prefix).linear_pos.weight: \(w.shape) - will be loaded via ChatterboxEngine.update()")
         }
 
         // Load positional biases

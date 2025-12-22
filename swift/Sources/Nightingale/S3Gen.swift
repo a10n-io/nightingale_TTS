@@ -450,26 +450,14 @@ public class S3ConformerFeedForward: Module {
         } else {
             print("🔧   ❌ No matching keys found!")
         }
+        // NOTE: w_1 and w_2 weights are loaded later via ChatterboxEngine.update()
+        // DO NOT transpose weights here to avoid double-transpose bug
+        // Weights will be transposed once in remapS3Keys() and applied via update()
         if let w = weights[w1Key] {
-            print("🔧   w_1 FROM FILE: \(w.shape)")
-            // Try .T property for transpose (matrix transpose)
-            let wTransposed = w.T
-            print("🔧   w_1 TRANSPOSED (using .T): \(wTransposed.shape)")
-            w1.weight = wTransposed
-            print("🔧   w_1.weight AFTER: \(w1.weight.shape)")
-        }
-        if let b = weights["\(prefix).w_1.bias"] {
-            w1.bias = b
+            print("🔧   w_1 FROM FILE: \(w.shape) - will be loaded via ChatterboxEngine.update()")
         }
         if let w = weights["\(prefix).w_2.weight"] {
-            print("🔧   w_2 FROM FILE: \(w.shape)")
-            let wTransposed = w.T
-            print("🔧   w_2 TRANSPOSED (using .T): \(wTransposed.shape)")
-            w2.weight = wTransposed
-            print("🔧   w_2.weight AFTER: \(w2.weight.shape)")
-        }
-        if let b = weights["\(prefix).w_2.bias"] {
-            w2.bias = b
+            print("🔧   w_2 FROM FILE: \(w.shape) - will be loaded via ChatterboxEngine.update()")
         }
     }
 }
@@ -921,15 +909,11 @@ public class UpsampleEncoder: Module {
     public func load(weights: [String: MLXArray], prefix: String = "encoder") {
         print("UpsampleEncoder: Loading weights with prefix '\(prefix)'")
 
-        // 1. Load embed.linear weights (MUST transpose PyTorch [out, in] -> MLX [in, out])
+        // NOTE: embed.linear weights are loaded later via ChatterboxEngine.update()
+        // DO NOT transpose weights here to avoid double-transpose bug
+        // Weights will be transposed once in remapS3Keys() and applied via update()
         if let w = weights["\(prefix).embed.linear.weight"] {
-            print("  📊 embed.linear.weight FROM FILE: \(w.shape)")
-            embedLinear.weight = w.T
-            print("  ✅ Loaded embed.linear.weight (transposed to \(embedLinear.weight.shape))")
-        }
-        if let b = weights["\(prefix).embed.linear.bias"] {
-            embedLinear.bias = b
-            print("  ✅ Loaded embed.linear.bias")
+            print("  📊 embed.linear.weight FROM FILE: \(w.shape) - will be loaded via ChatterboxEngine.update()")
         }
 
         // 2. Load embed.norm weights
@@ -977,26 +961,18 @@ public class UpsampleEncoder: Module {
             }
         }
 
-        // 6. Load up_layer.conv weights - PyTorch [out, in, kernel] -> MLX [out, kernel, in]
+        // NOTE: up_layer.conv weights are loaded later via ChatterboxEngine.update()
+        // DO NOT transpose weights here to avoid double-transpose bug
+        // Conv1d weights will be transposed once in remapS3Keys() and applied via update()
         if let w = weights["\(prefix).up_layer.conv.weight"] {
-            let transposed = w.swappedAxes(1, 2)
-            upLayer.conv.update(parameters: ModuleParameters.unflattened(["weight": transposed]))
-            print("  ✅ Loaded up_layer.conv.weight: \(w.shape) -> transposed to \(transposed.shape)")
-        }
-        if let b = weights["\(prefix).up_layer.conv.bias"] {
-            upLayer.conv.update(parameters: ModuleParameters.unflattened(["bias": b]))
-            print("  ✅ Loaded up_layer.conv.bias")
+            print("  Found up_layer.conv.weight: \(w.shape) - will be loaded via ChatterboxEngine.update()")
         }
 
-        // 7. Load up_embed weights (MUST transpose PyTorch [out, in] -> MLX [in, out])
+        // NOTE: up_embed.linear weights are loaded later via ChatterboxEngine.update()
+        // DO NOT transpose weights here to avoid double-transpose bug
+        // Weights will be transposed once in remapS3Keys() and applied via update()
         if let w = weights["\(prefix).up_embed.linear.weight"] {
-            print("  📊 up_embed.linear.weight FROM FILE: \(w.shape)")
-            upEmbedLinear.weight = w.T
-            print("  ✅ Loaded up_embed.linear.weight (transposed to \(upEmbedLinear.weight.shape))")
-        }
-        if let b = weights["\(prefix).up_embed.linear.bias"] {
-            upEmbedLinear.bias = b
-            print("  ✅ Loaded up_embed.linear.bias")
+            print("  📊 up_embed.linear.weight FROM FILE: \(w.shape) - will be loaded via ChatterboxEngine.update()")
         }
         if let w = weights["\(prefix).up_embed.norm.weight"] {
             upEmbedNorm.update(parameters: ModuleParameters.unflattened(["weight": w]))
@@ -2249,76 +2225,19 @@ public class S3Gen: Module {
         print("DEBUG S3Gen: Creating encoderProj FixedLinear(\(config.inputDim), \(config.melChannels))..."); fflush(stdout)
         self.encoderProj = FixedLinear(config.inputDim, config.melChannels, name: "S3Gen.encoderProj")
         print("DEBUG S3Gen: encoderProj created"); fflush(stdout)
-        // Load encoderProj weights (MUST transpose PyTorch [out, in] -> MLX [in, out])
-        print("DEBUG S3Gen: About to iterate flowWeights for encoderProj..."); fflush(stdout)
-        for (key, value) in flowWeights {
-            if key.hasPrefix("s3gen.flow.encoder_proj.") {
-                let remappedKey = key.replacingOccurrences(of: "s3gen.flow.encoder_proj.", with: "")
-                if remappedKey == "weight" {
-                    // Transpose PyTorch weight [80, 512] -> MLX format [512, 80]
-                    let transposedWeight = value.T
-                    print("DEBUG S3Gen: Transposing encoderProj weight from \(value.shape) to \(transposedWeight.shape)"); fflush(stdout)
-                    encoderProj.update(parameters: ModuleParameters.unflattened(["weight": transposedWeight]))
-                    print("DEBUG S3Gen: Loaded encoderProj.weight (transposed)"); fflush(stdout)
-                } else if remappedKey == "bias" {
-                    print("DEBUG S3Gen: Updating encoderProj bias..."); fflush(stdout)
-                    encoderProj.update(parameters: ModuleParameters.unflattened(["bias": value]))
-                    print("DEBUG S3Gen: Loaded encoderProj.bias"); fflush(stdout)
-                }
-            } else if key.hasPrefix("flow.encoder_proj.") {
-                let remappedKey = key.replacingOccurrences(of: "flow.encoder_proj.", with: "")
-                if remappedKey == "weight" {
-                    // Transpose PyTorch weight [80, 512] -> MLX format [512, 80]
-                    let transposedWeight = value.T
-                    print("DEBUG S3Gen: Transposing encoderProj weight from \(value.shape) to \(transposedWeight.shape)"); fflush(stdout)
-                    encoderProj.update(parameters: ModuleParameters.unflattened(["weight": transposedWeight]))
-                    print("DEBUG S3Gen: Loaded encoderProj.weight (transposed)"); fflush(stdout)
-                } else if remappedKey == "bias" {
-                    print("DEBUG S3Gen: Updating encoderProj bias (flow prefix)..."); fflush(stdout)
-                    encoderProj.update(parameters: ModuleParameters.unflattened(["bias": value]))
-                    print("DEBUG S3Gen: Loaded encoderProj.bias"); fflush(stdout)
-                }
-            }
-        }
-        print("DEBUG S3Gen: encoderProj weights loaded"); fflush(stdout)
+        // NOTE: encoderProj weights are loaded later in ChatterboxEngine via update()
+        // DO NOT load weights here to avoid double-transpose bug
+        // Weights will be transposed once in remapS3Keys() and applied via update()
+        print("DEBUG S3Gen: encoderProj will be loaded via ChatterboxEngine.update()"); fflush(stdout)
 
         print("DEBUG S3Gen: Creating spkEmbedAffine FixedLinear(192, \(config.melChannels))..."); fflush(stdout)
         self.spkEmbedAffine = FixedLinear(192, config.melChannels, name: "S3Gen.spkEmbedAffine")
         print("DEBUG S3Gen: spkEmbedAffine created"); fflush(stdout)
 
-        // Load spk_embed_affine_layer weights
-        // CRITICAL: PyTorch stores weights as [out_features, in_features] = [80, 192]
-        // MLX expects [in_features, out_features] = [192, 80]
-        // Must transpose!
-        print("DEBUG S3Gen: About to iterate flowWeights for spkEmbedAffine..."); fflush(stdout)
-        for (key, value) in flowWeights {
-            if key.hasPrefix("s3gen.flow.spk_embed_affine_layer.") {
-                let remappedKey = key.replacingOccurrences(of: "s3gen.flow.spk_embed_affine_layer.", with: "")
-                if remappedKey == "weight" {
-                    // Transpose PyTorch weight [80, 192] -> MLX format [192, 80]
-                    let transposedWeight = value.T
-                    print("DEBUG S3Gen: Transposing weight from \(value.shape) to \(transposedWeight.shape)")
-                    spkEmbedAffine.update(parameters: ModuleParameters.unflattened(["weight": transposedWeight]))
-                    print("DEBUG S3Gen: Loaded spkEmbedAffine.weight (transposed)")
-                } else if remappedKey == "bias" {
-                    spkEmbedAffine.update(parameters: ModuleParameters.unflattened(["bias": value]))
-                    print("DEBUG S3Gen: Loaded spkEmbedAffine.bias")
-                }
-            } else if key.hasPrefix("flow.spk_embed_affine_layer.") {
-                let remappedKey = key.replacingOccurrences(of: "flow.spk_embed_affine_layer.", with: "")
-                if remappedKey == "weight" {
-                    // Transpose PyTorch weight [80, 192] -> MLX format [192, 80]
-                    let transposedWeight = value.T
-                    print("DEBUG S3Gen: Transposing weight from \(value.shape) to \(transposedWeight.shape)")
-                    spkEmbedAffine.update(parameters: ModuleParameters.unflattened(["weight": transposedWeight]))
-                    print("DEBUG S3Gen: Loaded spkEmbedAffine.weight (transposed)")
-                } else if remappedKey == "bias" {
-                    spkEmbedAffine.update(parameters: ModuleParameters.unflattened(["bias": value]))
-                    print("DEBUG S3Gen: Loaded spkEmbedAffine.bias")
-                }
-            }
-        }
-        print("DEBUG S3Gen: spkEmbedAffine weights loaded"); fflush(stdout)
+        // NOTE: spkEmbedAffine weights are loaded later in ChatterboxEngine via update()
+        // DO NOT load weights here to avoid double-transpose bug
+        // Weights will be transposed once in remapS3Keys() and applied via update()
+        print("DEBUG S3Gen: spkEmbedAffine will be loaded via ChatterboxEngine.update()"); fflush(stdout)
 
         print("DEBUG S3Gen: Creating FlowMatchingDecoder..."); fflush(stdout)
         self.decoder = FlowMatchingDecoder(config: config)
