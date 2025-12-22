@@ -1043,9 +1043,16 @@ public class CausalBlock1D: Module {
                 eval(h)
                 eval(mask)
                 print("CAUSALBLOCK1D: x.shape=\(h.shape), mask.shape=\(mask.shape)")
+                print("CAUSALBLOCK1D: mask sum=\(mask.sum().item(Float.self)), mask.min=\(mask.min().item(Float.self)), mask.max=\(mask.max().item(Float.self))")
+                print("CAUSALBLOCK1D: h BEFORE mask: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]")
                 fflush(stdout)
             }
             h = h * mask
+            if CausalBlock1D.debugCalls {
+                eval(h)
+                print("CAUSALBLOCK1D: h AFTER mask: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]")
+                fflush(stdout)
+            }
         }
 
         // [B, C, L]
@@ -1414,7 +1421,7 @@ public class FlowMatchingDecoder: Module {
             print("DEC: Calling down.resnet with mask=\(maskDown == nil ? "nil" : "provided")")
             fflush(stdout)
             CausalResNetBlock.debugEnabled = true
-            CausalBlock1D.debugCalls = false  // Disable verbose mask logging
+            CausalBlock1D.debugCalls = true  // Enable mask debugging
         }
         h = down.resnet(h, mask: maskDown, timeEmb: tEmb)
         if debug {
