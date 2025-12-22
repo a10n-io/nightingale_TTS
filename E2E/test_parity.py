@@ -68,14 +68,18 @@ if voice_path.exists():
     t3_cond = T3Cond(
         speaker_emb=voice_data["t3.speaker_emb"].to(device),
         cond_prompt_speech_tokens=voice_data["t3.cond_prompt_speech_tokens"].to(device),
-        emotion_adv=torch.ones(1, 1, 1) * 0.5,  # Default emotion
+        emotion_adv=(torch.ones(1, 1, 1) * 0.5).to(device),  # Default emotion
     )
 
     # Extract S3Gen conditioning
+    prompt_token = voice_data["gen.prompt_token"].to(device)
+    prompt_feat = voice_data["gen.prompt_feat"].to(device)
     gen_dict = {
         "embedding": voice_data["gen.embedding"].to(device),
-        "prompt_token": voice_data["gen.prompt_token"].to(device),
-        "prompt_feat": voice_data["gen.prompt_feat"].to(device),
+        "prompt_token": prompt_token,
+        "prompt_feat": prompt_feat,
+        "prompt_token_len": torch.tensor([prompt_token.shape[1]], device=device),
+        "prompt_feat_len": torch.tensor([prompt_feat.shape[1]], device=device),
     }
 
     model.conds = Conditionals(t3_cond, gen_dict)
