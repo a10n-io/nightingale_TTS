@@ -80,6 +80,10 @@ let package = Package(
             name: "DebugMLXStats",
             targets: ["DebugMLXStats"]
         ),
+        .executable(
+            name: "VerifyDecoderDownBlock",
+            targets: ["VerifyDecoderDownBlock"]
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.21.0"),
@@ -191,6 +195,11 @@ let package = Package(
             name: "DebugMLXStats",
             dependencies: ["Nightingale"],
             path: "test_scripts/DebugMLXStats"
+        ),
+        .executableTarget(
+            name: "VerifyDecoderDownBlock",
+            dependencies: ["Nightingale"],
+            path: "test_scripts/VerifyDecoderDownBlock"
         ),
     ]
 )

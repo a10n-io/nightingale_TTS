@@ -1095,19 +1095,19 @@ public class CausalResNetBlock: Module {
         h = block2(h, mask: mask)
         if CausalResNetBlock.debugEnabled { eval(h); print("RESNET block2: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]") }
 
-        // CRITICAL: Python applies mask to x BEFORE res_conv: output = h + self.res_conv(x * mask)
-        // This prevents unmasked values from leaking through the residual connection
-        var xInput = x
+        // CRITICAL FIX: Python applies mask to h (block2 output), NOT to x (residual input)
+        // Python code: h_masked = h_mish2 * mask; h_res = conv(x); return h_masked + h_res
+        // Apply mask to h AFTER block2, NOT to x before res_conv
         if let mask = mask {
-            xInput = x * mask
-            if CausalResNetBlock.debugEnabled { eval(xInput); print("RESNET x * mask: [\(xInput.min().item(Float.self)), \(xInput.max().item(Float.self))]") }
+            h = h * mask
+            if CausalResNetBlock.debugEnabled { eval(h); print("RESNET h * mask: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]") }
         }
 
         // Python: res_conv with transpose, same as CausalBlock1D transpose pattern
         // x is [B, C, T], Conv1d expects [B, T, C]
-        var res = xInput.transposed(0, 2, 1)  // [B, T, C]
-        res = resConv(res)                     // [B, T, Cout]
-        res = res.transposed(0, 2, 1)          // [B, Cout, T]
+        var res = x.transposed(0, 2, 1)  // [B, T, C] - Use UNMASKED x
+        res = resConv(res)                // [B, T, Cout]
+        res = res.transposed(0, 2, 1)     // [B, Cout, T]
         if CausalResNetBlock.debugEnabled { eval(res); print("RESNET resConv: [\(res.min().item(Float.self)), \(res.max().item(Float.self))]") }
         return h + res
     }
@@ -1494,7 +1494,7 @@ public class FlowMatchingDecoder: Module {
             print("DEC up concat: h=\(h.shape), skip=\(skip.shape), hTrunc=\(hTrunc.shape)")
         }
         h = concatenated([hTrunc, skip], axis: 1)
-        if debug { eval(h); print("DEC after concat: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]") }
+        if debug { eval(h); print("DEC after concat: shape=\(h.shape), range=[\(h.min().item(Float.self)), \(h.max().item(Float.self))]") }
 
         // Up blocks: after concat with skip, h is back to full resolution - use full mask (or nil)
         let maskFull: MLXArray? = useMask ? masks.first : nil
