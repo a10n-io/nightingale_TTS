@@ -2250,6 +2250,17 @@ public class S3Gen: Module {
                 }
             }
         }
+
+        // CRITICAL: Remap transformer attention keys
+        // Python BasicTransformerBlock uses .attn1. but Swift uses .attention.
+        result = result.replacingOccurrences(of: ".attn1.to_q.", with: ".attention.queryProj.")
+        result = result.replacingOccurrences(of: ".attn1.to_k.", with: ".attention.keyProj.")
+        result = result.replacingOccurrences(of: ".attn1.to_v.", with: ".attention.valueProj.")
+        result = result.replacingOccurrences(of: ".attn1.to_out.0.", with: ".attention.outProj.")
+
+        // Python uses norm3 for feedforward normalization, Swift uses norm2
+        result = result.replacingOccurrences(of: ".norm3.", with: ".norm2.")
+
         // Remove temporary markers
         result = result.replacingOccurrences(of: "%%%", with: "")
         return result
@@ -2468,6 +2479,20 @@ public class S3Gen: Module {
             let moduleTimeMlpKeys = allDecoderParamKeys.filter { $0.contains("timeMLP") }
             print("DEBUG S3Gen: Module timeMLP keys (\(moduleTimeMlpKeys.count)): \(moduleTimeMlpKeys)"); fflush(stdout)
 
+            // Check if transformer keys exist in decoderWeights (what we're loading)
+            let tfmrKeysInWeights = decoderWeights.keys.filter { $0.contains("transformers") }.sorted()
+            print("DEBUG S3Gen: Transformer keys in decoderWeights (\(tfmrKeysInWeights.count)):"); fflush(stdout)
+            for k in Array(tfmrKeysInWeights.prefix(10)) {
+                print("  \(k)"); fflush(stdout)
+            }
+
+            // Check if transformer keys exist in module
+            let moduleTfmrKeys = allDecoderParamKeys.filter { $0.contains("transformers") }
+            print("DEBUG S3Gen: Module transformer keys (\(moduleTfmrKeys.count)):"); fflush(stdout)
+            for k in Array(moduleTfmrKeys.sorted().prefix(10)) {
+                print("  \(k)"); fflush(stdout)
+            }
+
             // Check a weight value before update
             eval(self.decoder.timeMLP.linear1.weight)
             let timeMlpWeightBefore = self.decoder.timeMLP.linear1.weight[0, 0..<5].asArray(Float.self)
@@ -2482,6 +2507,14 @@ public class S3Gen: Module {
 
             // Check if they're different
             let changed = timeMlpWeightBefore != timeMlpWeightAfter
+
+            // CRITICAL: Check transformer attention weights to verify loading
+            let tfmr0 = self.decoder.downBlocks[0].transformers[0]
+            eval(tfmr0.attention.queryProj.weight)
+            let qWeight = tfmr0.attention.queryProj.weight
+            print("DEBUG S3Gen: downBlocks[0].transformers[0].attention.queryProj.weight shape: \(qWeight.shape)"); fflush(stdout)
+            print("DEBUG S3Gen: downBlocks[0].transformers[0].attention.queryProj.weight[0,:5]: \(qWeight[0, 0..<5].asArray(Float.self))"); fflush(stdout)
+            print("DEBUG S3Gen: downBlocks[0].transformers[0].attention.queryProj.weight range: [\(qWeight.min().item(Float.self)), \(qWeight.max().item(Float.self))]"); fflush(stdout)
             print("DEBUG S3Gen: Weights changed: \(changed)"); fflush(stdout)
 
             print("DEBUG S3Gen: Decoder weights loaded via decoder.update()"); fflush(stdout)
