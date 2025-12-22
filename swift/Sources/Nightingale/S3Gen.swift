@@ -1142,10 +1142,15 @@ public class CausalResNetBlock: Module {
         }
 
         // Python: res_conv with transpose, same as CausalBlock1D transpose pattern
+        // Python does: self.res_conv(x * mask) - simple element-wise multiplication!
         // x is [B, C, T], Conv1d expects [B, T, C]
-        var res = x.transposed(0, 2, 1)  // [B, T, C] - Use UNMASKED x
-        res = resConv(res)                // [B, T, Cout]
-        res = res.transposed(0, 2, 1)     // [B, Cout, T]
+        var xForRes = x
+        if let mask = mask {
+            xForRes = x * mask  // Simple multiplication, like Python!
+        }
+        var res = xForRes.transposed(0, 2, 1)  // [B, T, C]
+        res = resConv(res)                      // [B, T, Cout]
+        res = res.transposed(0, 2, 1)           // [B, Cout, T]
         if CausalResNetBlock.debugEnabled { eval(res); print("RESNET resConv: [\(res.min().item(Float.self)), \(res.max().item(Float.self))]") }
         return h + res
     }
@@ -1354,6 +1359,25 @@ public class FlowMatchingDecoder: Module {
         let L = x.shape[2]
         let debug = FlowMatchingDecoder.debugStep == 1
 
+        // Helper function to check spatial variation (prompt vs generated regions)
+        func checkSpatial(_ h: MLXArray, label: String) {
+            let T = h.shape[2]
+            // The sequence length varies: 696 or 748 depending on the test
+            // Find the prompt length by checking cond for zeros
+            // For now, we'll handle both common cases
+            if T >= 500 {
+                // Assume prompt is first 500 frames (common pattern)
+                let L_pm = 500
+                let promptRegion = h[0..., 0..., 0..<L_pm]
+                let generatedRegion = h[0..., 0..., L_pm...]
+                eval(promptRegion); eval(generatedRegion)
+                let promptMean = promptRegion.mean().item(Float.self)
+                let generatedMean = generatedRegion.mean().item(Float.self)
+                let bias = generatedMean - promptMean
+                print("   \(label) SPATIAL: prompt=\(String(format: "%.4f", promptMean)), generated=\(String(format: "%.4f", generatedMean)), bias=\(String(format: "%.4f", bias))")
+            }
+        }
+
         if debug {
             print("DEC: Entered callAsFunction, x.shape = \(x.shape), mask?.shape = \(mask?.shape ?? [0])")
             eval(x); eval(mu); eval(speakerEmb); eval(cond)
@@ -1405,6 +1429,7 @@ public class FlowMatchingDecoder: Module {
         if debug {
             eval(h)
             print("DEC: h concatenated, h.shape = \(h.shape), range=[\(h.min().item(Float.self)), \(h.max().item(Float.self))], mean=\(h.mean().item(Float.self))")
+            checkSpatial(h, label: "01_concat")
             fflush(stdout)
         }
 
@@ -1492,6 +1517,7 @@ public class FlowMatchingDecoder: Module {
             CausalBlock1D.debugCalls = false
             eval(h)
             print("DEC: down.resnet complete, h range: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]")
+            checkSpatial(h, label: "02_down_resnet")
         }
         h = h.transposed(0, 2, 1)
         if debug {
@@ -1513,7 +1539,11 @@ public class FlowMatchingDecoder: Module {
             if debug { eval(h); print("DEC down.tfmr[\(ti)]: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]") }
         }
         h = h.transposed(0, 2, 1)
-        if debug { eval(h); print("DEC after down.tfmrs (transposed): [\(h.min().item(Float.self)), \(h.max().item(Float.self))]") }
+        if debug {
+            eval(h)
+            print("DEC after down.tfmrs (transposed): [\(h.min().item(Float.self)), \(h.max().item(Float.self))]")
+            checkSpatial(h, label: "03_down_tfmrs")
+        }
         let skip = h
         // Python line 295: x = downsample(x * mask_down)
         // NOTE: With channels=[256], Python uses CausalConv1d(3) not Downsample1D,
@@ -1552,19 +1582,30 @@ public class FlowMatchingDecoder: Module {
                  if debug && i == 11 { eval(h); print("MID[11] tfmr[\(ti)]: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]") }
              }
              h = h.transposed(0, 2, 1)
-             if debug { eval(h); print("DEC after mid[\(i)]: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]") }
+             if debug {
+                 eval(h)
+                 print("DEC after mid[\(i)]: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]")
+                 checkSpatial(h, label: String(format: "04_mid_%02d", i))
+             }
         }
 
         // Python truncates h to match skip length: x[:, :, :skip.shape[-1]]
         let skipLen = skip.shape[2]
         let hTrunc = h[.ellipsis, 0..<skipLen]
         if debug {
-            eval(h); eval(skip)
+            eval(h); eval(skip); eval(hTrunc)
             print("DEC before concat: h=[\(h.min().item(Float.self)), \(h.max().item(Float.self))], skip=[\(skip.min().item(Float.self)), \(skip.max().item(Float.self))]")
             print("DEC up concat: h=\(h.shape), skip=\(skip.shape), hTrunc=\(hTrunc.shape)")
+            // Check spatial bias of h and skip separately
+            checkSpatial(hTrunc, label: "05_h_before_concat")
+            checkSpatial(skip, label: "05_skip_before_concat")
         }
         h = concatenated([hTrunc, skip], axis: 1)
-        if debug { eval(h); print("DEC after concat: shape=\(h.shape), range=[\(h.min().item(Float.self)), \(h.max().item(Float.self))]") }
+        if debug {
+            eval(h)
+            print("DEC after concat: shape=\(h.shape), range=[\(h.min().item(Float.self)), \(h.max().item(Float.self))]")
+            checkSpatial(h, label: "05_skip_concat")
+        }
 
         // Up blocks: after concat with skip, h is back to full resolution - use full mask (or nil)
         let maskFull: MLXArray? = useMask ? masks.first : nil
@@ -1586,14 +1627,22 @@ public class FlowMatchingDecoder: Module {
             CausalResNetBlock.debugEnabled = false
             CausalBlock1D.debugCalls = false
         }
-        if debug { eval(h); print("DEC after up.resnet: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]") }
+        if debug {
+            eval(h)
+            print("DEC after up.resnet: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]")
+            checkSpatial(h, label: "06_up_resnet")
+        }
         h = h.transposed(0, 2, 1)
         // Recreate attention mask for full resolution (after concat)
         let fullL = h.shape[1]
         attnMask = makeAttentionMask(fullL, paddingMask: maskFull)
         for tfmr in up.transformers { h = tfmr(h, mask: attnMask) }
         h = h.transposed(0, 2, 1)
-        if debug { eval(h); print("DEC after up.transformers: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]") }
+        if debug {
+            eval(h)
+            print("DEC after up.transformers: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]")
+            checkSpatial(h, label: "07_up_tfmrs")
+        }
         // Python applies mask before upsample (only if using mask)
         if let ul = up.upLayer {
             if useMask, let mf = maskFull {
@@ -1608,7 +1657,11 @@ public class FlowMatchingDecoder: Module {
 
         // After upsampling, h is back to full resolution - use full mask (or nil)
         h = finalBlock(h, mask: maskFull) // [B, C, T] output
-        if debug { eval(h); print("DEC after finalBlock: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]") }
+        if debug {
+            eval(h)
+            print("DEC after finalBlock: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]")
+            checkSpatial(h, label: "08_finalBlock")
+        }
 
         // Python multiplies by mask before final_proj: output = self.final_proj(x * mask_up)
         if useMask, let mf = maskFull {
@@ -1620,7 +1673,11 @@ public class FlowMatchingDecoder: Module {
         h = h.transposed(0, 2, 1) // [B, C, T] → [B, T, C]
         h = finalProj(h)          // [B, T, 80]
         h = h.transposed(0, 2, 1) // [B, T, 80] → [B, 80, T]
-        if debug { eval(h); print("DEC after finalProj: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]") }
+        if debug {
+            eval(h)
+            print("DEC after finalProj: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]")
+            checkSpatial(h, label: "09_finalProj")
+        }
 
         // Python multiplies by mask after final_proj: return output * mask
         if useMask, let mf = maskFull {
@@ -1636,6 +1693,17 @@ public class FlowMatchingDecoder: Module {
                 let hb = h[b]
                 eval(hb)
                 print("DEC Batch[\(b)] output: [\(hb.min().item(Float.self)), \(hb.max().item(Float.self))], mean=\(hb.mean().item(Float.self))")
+            }
+
+            // Check spatial variation in vCond (Batch[0]) output
+            let T = h.shape[2]
+            if T == 748 {
+                let L_pm = 500
+                let vCondPrompt = h[0, 0..., 0..<L_pm]
+                let vCondGenerated = h[0, 0..., L_pm...]
+                eval(vCondPrompt); eval(vCondGenerated)
+                print("DEC vCond (Batch[0]) SPATIAL - prompt[0..<\(L_pm)]: [\(vCondPrompt.min().item(Float.self)), \(vCondPrompt.max().item(Float.self))], mean=\(vCondPrompt.mean().item(Float.self))")
+                print("DEC vCond (Batch[0]) SPATIAL - generated[\(L_pm)...]: [\(vCondGenerated.min().item(Float.self)), \(vCondGenerated.max().item(Float.self))], mean=\(vCondGenerated.mean().item(Float.self))")
             }
         }
 
@@ -2688,6 +2756,13 @@ public class S3Gen: Module {
         eval(mu)
         print("TRACE 2: encoder_out (mu) shape=\(mu.shape), range=[\(mu.min().item(Float.self)), \(mu.max().item(Float.self))], mean=\(mu.mean().item(Float.self))"); fflush(stdout)
 
+        // DEBUG: Check mu for prompt vs generated regions
+        let muPromptRegion = mu[0, 0..<500, 0...]
+        let muGeneratedRegion = mu[0, 500..., 0...]
+        eval(muPromptRegion); eval(muGeneratedRegion)
+        print("DEBUG: mu prompt region [0, 0..<500] range=[\(muPromptRegion.min().item(Float.self)), \(muPromptRegion.max().item(Float.self))], mean=\(muPromptRegion.mean().item(Float.self))")
+        print("DEBUG: mu generated region [0, 500...] range=[\(muGeneratedRegion.min().item(Float.self)), \(muGeneratedRegion.max().item(Float.self))], mean=\(muGeneratedRegion.mean().item(Float.self))")
+
         // 6. Cut prompt from mu to get "generated" target length
         let promptMel = promptFeat // Already [1, T, 80]
         let L_pm = promptMel.shape[1]
@@ -2824,12 +2899,24 @@ public class S3Gen: Module {
             let v = (1.0 + cfgRate) * vCond - cfgRate * vUncond
 
             // Debug CFG components for first step
-            if step == 1 {
-                eval(vCond); eval(vUncond)
-                print("   CFG DEBUG (step 1):")
+            if step == 1 || step == 5 || step == 10 {
+                eval(vCond); eval(vUncond); eval(v)
+                print("   CFG DEBUG (step \(step)):")
                 print("     vCond:   [\(vCond.min().item(Float.self)), \(vCond.max().item(Float.self))], mean=\(vCond.mean().item(Float.self))")
                 print("     vUncond: [\(vUncond.min().item(Float.self)), \(vUncond.max().item(Float.self))], mean=\(vUncond.mean().item(Float.self))")
                 print("     CFG formula: (1.7) * vCond - (0.7) * vUncond")
+
+                 // Check spatial variation in velocity field to trace accumulation
+                // v shape is [1, 80, T] where T is time dimension at index 2
+                let L_total = v.shape[2]
+                if L_total == 748 {
+                    let L_pm = 500
+                    let vPromptRegion = v[0..., 0..., 0..<L_pm]
+                    let vGeneratedRegion = v[0..., 0..., L_pm...]
+                    eval(vPromptRegion); eval(vGeneratedRegion)
+                    print("     v SPATIAL (step \(step)) - prompt[0..<\(L_pm)]: [\(vPromptRegion.min().item(Float.self)), \(vPromptRegion.max().item(Float.self))], mean=\(vPromptRegion.mean().item(Float.self))")
+                    print("     v SPATIAL (step \(step)) - generated[\(L_pm)...]: [\(vGeneratedRegion.min().item(Float.self)), \(vGeneratedRegion.max().item(Float.self))], mean=\(vGeneratedRegion.mean().item(Float.self))")
+                }
             }
 
             // Detailed tracing for all steps
@@ -2844,6 +2931,19 @@ public class S3Gen: Module {
             eval(xt)
             print("   x after: [\(xt.min().item(Float.self)), \(xt.max().item(Float.self))]")
 
+            // Check spatial variation in xt at key steps
+            if step == 1 || step == 5 || step == 10 {
+                let L_total = xt.shape[2]
+                if L_total == 748 {
+                    let L_pm = 500
+                    let xtPromptRegion = xt[0..., 0..., 0..<L_pm]
+                    let xtGeneratedRegion = xt[0..., 0..., L_pm...]
+                    eval(xtPromptRegion); eval(xtGeneratedRegion)
+                    print("   xt SPATIAL (after step \(step)) - prompt[0..<\(L_pm)]: [\(xtPromptRegion.min().item(Float.self)), \(xtPromptRegion.max().item(Float.self))], mean=\(xtPromptRegion.mean().item(Float.self))")
+                    print("   xt SPATIAL (after step \(step)) - generated[\(L_pm)...]: [\(xtGeneratedRegion.min().item(Float.self)), \(xtGeneratedRegion.max().item(Float.self))], mean=\(xtGeneratedRegion.mean().item(Float.self))")
+                }
+            }
+
             // Update time for next step
             currentT = currentT + dt
             if step < nTimesteps {
@@ -2854,9 +2954,15 @@ public class S3Gen: Module {
         // 8. Vocode
         eval(xt)
         print("TRACE 6: ODE output xt shape=\(xt.shape), dtype=\(xt.dtype), range=[\(xt.min().item(Float.self)), \(xt.max().item(Float.self))], mean=\(xt.mean().item(Float.self))")
+
+        // DEBUG: Check prompt region vs generated region
+        let promptRegion = xt[0..., 0..., 0..<L_pm]
+        eval(promptRegion)
+        print("DEBUG: prompt region [0..., 0..., 0..<\(L_pm)] range=[\(promptRegion.min().item(Float.self)), \(promptRegion.max().item(Float.self))], mean=\(promptRegion.mean().item(Float.self))")
+
         let generatedMel = xt[0..., 0..., L_pm...]
         eval(generatedMel)
-        print("TRACE 7: generatedMel shape=\(generatedMel.shape), range=[\(generatedMel.min().item(Float.self)), \(generatedMel.max().item(Float.self))]")
+        print("TRACE 7: generatedMel [0..., 0..., \(L_pm)...] shape=\(generatedMel.shape), range=[\(generatedMel.min().item(Float.self)), \(generatedMel.max().item(Float.self))], mean=\(generatedMel.mean().item(Float.self))")
 
         // Debug: Check raw mel from flow decoder
         print("MEL CHANNEL ENERGIES (decoder output):")
