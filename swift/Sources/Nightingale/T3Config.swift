@@ -22,6 +22,10 @@ public struct T3Config: Codable {
     public let emotionAdv: Bool
     public let ropeScaling: RopeScaling?
 
+    // Special tokens for text input (matches Python t3_config.py)
+    public let startTextToken: Int  // SOT = 255
+    public let stopTextToken: Int   // EOT = 0
+
     public struct RopeScaling: Codable {
         public let factor: Float
         public let highFreqFactor: Float
@@ -57,6 +61,8 @@ public struct T3Config: Codable {
         case usePerceiverResampler = "use_perceiver_resampler"
         case emotionAdv = "emotion_adv"
         case ropeScaling = "rope_scaling"
+        case startTextToken = "start_text_token"
+        case stopTextToken = "stop_text_token"
     }
 
     /// Default T3 configuration (English-only, 704 vocab)
@@ -86,7 +92,9 @@ public struct T3Config: Codable {
                 lowFreqFactor: 1.0,
                 originalMaxPositionEmbeddings: 8192,
                 ropeType: "llama3"
-            )
+            ),
+            startTextToken: 255,  // SOT token
+            stopTextToken: 0      // EOT token
         )
     }
 
@@ -117,7 +125,9 @@ public struct T3Config: Codable {
                 lowFreqFactor: 1.0,
                 originalMaxPositionEmbeddings: 8192,
                 ropeType: "llama3"
-            )
+            ),
+            startTextToken: 255,  // SOT token
+            stopTextToken: 0      // EOT token
         )
     }
 

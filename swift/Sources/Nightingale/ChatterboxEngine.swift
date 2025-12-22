@@ -39,8 +39,20 @@ public actor ChatterboxEngine {
     }
 
     /// Tokenize text for testing
+    /// Matches Python behavior: prepends SOT (255) and appends EOT (0)
     public func tokenizeText(_ text: String) throws -> MLXArray {
-        let tokens = tokenize(text)
+        guard let t3Config = t3?.config else {
+            throw ChatterboxError.modelNotLoaded
+        }
+
+        var tokens = tokenize(text)
+
+        // Prepend SOT (start-of-text) token
+        tokens.insert(t3Config.startTextToken, at: 0)
+
+        // Append EOT (end-of-text) token
+        tokens.append(t3Config.stopTextToken)
+
         return MLXArray(tokens.map { Int32($0) }).reshaped([1, tokens.count])
     }
 
@@ -1127,8 +1139,13 @@ public actor ChatterboxEngine {
         print("DEBUG: Text after puncNorm: \"\(normalizedText)\""); fflush(stdout)
 
         print("DEBUG: Tokenizing text..."); fflush(stdout)
-        let tokens = tokenize(normalizedText)
-        print("DEBUG: Got \(tokens.count) tokens"); fflush(stdout)
+        var tokens = tokenize(normalizedText)
+
+        // Prepend SOT (255) and append EOT (0) - matches Python's cross_validate_python.py
+        tokens.insert(t3.config.startTextToken, at: 0)
+        tokens.append(t3.config.stopTextToken)
+
+        print("DEBUG: Got \(tokens.count) tokens (with SOT/EOT)"); fflush(stdout)
         print("DEBUG: Token values: \(tokens.prefix(20))... (showing first 20)"); fflush(stdout)
         print("DEBUG: Python would produce 42 tokens: [255, 284, 18, 84, ...]"); fflush(stdout)
         let textTokens = MLXArray(tokens.map { Int32($0) }).expandedDimensions(axis: 0)
