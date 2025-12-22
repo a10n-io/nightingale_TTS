@@ -2444,6 +2444,13 @@ public class S3Gen: Module {
         result = result.replacingOccurrences(of: ".attn1.to_v.", with: ".attention.valueProj.")
         result = result.replacingOccurrences(of: ".attn1.to_out.0.", with: ".attention.outProj.")
 
+        // CRITICAL: Remap transformer feedforward (FlowMLP) keys
+        // Python: .ff.net.0.proj. (first linear with GELU activation layer wrapped)
+        // Python: .ff.net.2. (second linear, index 2 because GELU is at index 1)
+        // Swift: .ff.layers.0. and .ff.layers.1.
+        result = result.replacingOccurrences(of: ".ff.net.0.proj.", with: ".ff.layers.0.")
+        result = result.replacingOccurrences(of: ".ff.net.2.", with: ".ff.layers.1.")
+
         // Python uses norm3 for feedforward normalization, Swift uses norm2
         result = result.replacingOccurrences(of: ".norm3.", with: ".norm2.")
 
