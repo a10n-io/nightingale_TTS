@@ -1403,7 +1403,8 @@ public class FlowMatchingDecoder: Module {
         }
         var h = concatenated([x, mu, spkExpanded, cond], axis: 1) // [B, 320, T]
         if debug {
-            print("DEC: h concatenated, h.shape = \(h.shape)")
+            eval(h)
+            print("DEC: h concatenated, h.shape = \(h.shape), range=[\(h.min().item(Float.self)), \(h.max().item(Float.self))], mean=\(h.mean().item(Float.self))")
             fflush(stdout)
         }
 
@@ -2129,6 +2130,63 @@ public class S3Gen: Module {
     // Python: mx.random.seed(0); self.rand_noise = mx.random.normal((1, 80, 50 * 300))
     public var fixedNoise: MLXArray
 
+    // Helper function to remap Python's UNetBlock structure to Swift's
+    // Python: {down|mid|up}Blocks.X.0.* -> Swift: {down|mid|up}Blocks.X.resnet.*
+    // Python: {down|mid|up}Blocks.X.1.Y.* -> Swift: {down|mid|up}Blocks.X.transformers.Y.*
+    // Python: {down|mid|up}Blocks.X.2.* -> Swift: {down|mid|up}Blocks.X.{down|up}Layer.*
+    private static func remapUNetBlockKeys(_ key: String) -> String {
+        var result = key
+
+        // Match pattern: (downBlocks|midBlocks|upBlocks).(\d+).0.
+        // Replace with: $1.$2.resnet.
+        let blockTypes = ["downBlocks", "midBlocks", "upBlocks"]
+        for blockType in blockTypes {
+            // Pattern: blockType.X.0. -> blockType.X.resnet.
+            result = result.replacingOccurrences(
+                of: "\(blockType).",
+                with: "%%%\(blockType).",
+                options: []
+            )
+            // Now replace .0. with .resnet. (only for UNet blocks)
+            if result.contains("%%%\(blockType).") {
+                // Find instances like %%%blockType.0.0. and replace with %%%blockType.0.resnet.
+                let pattern = "%%%\(blockType)\\.(\\d+)\\.0\\."
+                if let regex = try? NSRegularExpression(pattern: pattern) {
+                    let range = NSRange(result.startIndex..., in: result)
+                    result = regex.stringByReplacingMatches(
+                        in: result,
+                        range: range,
+                        withTemplate: "%%%\(blockType).$1.resnet."
+                    )
+                }
+                // Find instances like %%%blockType.0.1.Y. and replace with %%%blockType.0.transformers.Y.
+                let tfmrPattern = "%%%\(blockType)\\.(\\d+)\\.1\\.(\\d+)\\."
+                if let regex = try? NSRegularExpression(pattern: tfmrPattern) {
+                    let range = NSRange(result.startIndex..., in: result)
+                    result = regex.stringByReplacingMatches(
+                        in: result,
+                        range: range,
+                        withTemplate: "%%%\(blockType).$1.transformers.$2."
+                    )
+                }
+                // Find instances like %%%blockType.0.2. and replace with appropriate layer
+                let layerPattern = "%%%\(blockType)\\.(\\d+)\\.2\\."
+                if let regex = try? NSRegularExpression(pattern: layerPattern) {
+                    let range = NSRange(result.startIndex..., in: result)
+                    let layerName = blockType == "downBlocks" ? "downLayer" : "upLayer"
+                    result = regex.stringByReplacingMatches(
+                        in: result,
+                        range: range,
+                        withTemplate: "%%%\(blockType).$1.\(layerName)."
+                    )
+                }
+            }
+        }
+        // Remove temporary markers
+        result = result.replacingOccurrences(of: "%%%", with: "")
+        return result
+    }
+
     public init(flowWeights: [String: MLXArray], vocoderWeights: [String: MLXArray]?) {
         let config = S3GenConfig()
         self.inputEmbedding = Embedding(embeddingCount: config.vocabSize, dimensions: config.inputDim)
@@ -2252,6 +2310,117 @@ public class S3Gen: Module {
         print("DEBUG S3Gen: Fixed noise generated"); fflush(stdout)
         print("DEBUG S3Gen: Calling super.init()..."); fflush(stdout)
         super.init()
+        print("DEBUG S3Gen: super.init() complete"); fflush(stdout)
+
+        // Load decoder weights with comprehensive key remapping
+        print("DEBUG S3Gen: Loading decoder weights..."); fflush(stdout)
+        var decoderWeights: [String: MLXArray] = [:]
+        var transposedLinearCount = 0
+        var transposedConv1dCount = 0
+        for (key, value) in flowWeights {
+            if key.contains("decoder.estimator") {
+                // Remap: flow.decoder.estimator.* -> (no prefix, decoder is implied)
+                var remappedKey = key
+                    .replacingOccurrences(of: "flow.decoder.estimator.", with: "")
+                    .replacingOccurrences(of: "s3gen.flow.decoder.estimator.", with: "")
+
+                // Convert Python snake_case to Swift camelCase
+                remappedKey = remappedKey
+                    .replacingOccurrences(of: "time_mlp.linear_1", with: "timeMLP.linear1")
+                    .replacingOccurrences(of: "time_mlp.linear_2", with: "timeMLP.linear2")
+                    .replacingOccurrences(of: "down_blocks", with: "downBlocks")
+                    .replacingOccurrences(of: "mid_blocks", with: "midBlocks")
+                    .replacingOccurrences(of: "up_blocks", with: "upBlocks")
+                    .replacingOccurrences(of: "final_block", with: "finalBlock")
+                    .replacingOccurrences(of: "final_proj", with: "finalProj")
+
+                // Remap UNetBlock structure (down_blocks.X.0 -> downBlocks.X.resnet, etc.)
+                remappedKey = S3Gen.remapUNetBlockKeys(remappedKey)
+
+                // Remap CausalBlock1D internal structure:
+                // Python: .block.0. (Conv1d) -> Swift: .conv.conv.
+                // Python: .block.2. (GroupNorm) -> Swift: .norm.
+                remappedKey = remappedKey
+                    .replacingOccurrences(of: ".block.0.", with: ".conv.conv.")
+                    .replacingOccurrences(of: ".block.2.", with: ".norm.")
+
+                // Remap CausalConv1d structure (downLayer/upLayer are CausalConv1d):
+                // Python: downLayer.weight -> Swift: downLayer.conv.weight
+                remappedKey = remappedKey
+                    .replacingOccurrences(of: "downLayer.weight", with: "downLayer.conv.weight")
+                    .replacingOccurrences(of: "downLayer.bias", with: "downLayer.conv.bias")
+                    .replacingOccurrences(of: "upLayer.weight", with: "upLayer.conv.weight")
+                    .replacingOccurrences(of: "upLayer.bias", with: "upLayer.conv.bias")
+
+                var finalW = value
+
+                // Transpose Linear weights from PyTorch [out, in] to MLX [in, out]
+                let isLinear = remappedKey.hasSuffix(".weight") && finalW.ndim == 2 &&
+                              !remappedKey.contains(".conv.") && !remappedKey.contains("norm.")
+                if isLinear {
+                    finalW = finalW.transposed()
+                    transposedLinearCount += 1
+                }
+
+                // Transpose Conv1d weights from PyTorch [out, in, kernel] to MLX [out, kernel, in]
+                let isConv1d = remappedKey.hasSuffix(".weight") && finalW.ndim == 3 &&
+                              !remappedKey.contains("norm") && !remappedKey.contains("embedding")
+                if isConv1d {
+                    finalW = finalW.transposed(0, 2, 1)
+                    transposedConv1dCount += 1
+                }
+
+                decoderWeights[remappedKey] = finalW
+            }
+        }
+        print("DEBUG S3Gen: Found \(decoderWeights.count) decoder weight keys"); fflush(stdout)
+        print("DEBUG S3Gen: Transposed \(transposedLinearCount) Linear weights, \(transposedConv1dCount) Conv1d weights"); fflush(stdout)
+        if decoderWeights.count > 0 {
+            let sampleKeys = Array(decoderWeights.keys.sorted().prefix(10))
+            print("DEBUG S3Gen: Sample decoder keys (first 10):"); fflush(stdout)
+            for k in sampleKeys {
+                print("  \(k)"); fflush(stdout)
+            }
+
+            // Check if timeMLP keys are present
+            let timeMlpKeys = decoderWeights.keys.filter { $0.contains("timeMLP") }.sorted()
+            print("DEBUG S3Gen: timeMLP keys (\(timeMlpKeys.count)): \(timeMlpKeys)"); fflush(stdout)
+
+            // Also print what keys the decoder Module expects
+            let decoderParams = self.decoder.parameters().flattened()
+            let allDecoderParamKeys = decoderParams.map { $0.0 }.sorted()
+            print("DEBUG S3Gen: Decoder module has \(allDecoderParamKeys.count) parameter keys"); fflush(stdout)
+            let decoderParamKeys = Array(allDecoderParamKeys.prefix(10))
+            print("DEBUG S3Gen: Decoder module keys (first 10):"); fflush(stdout)
+            for k in decoderParamKeys {
+                print("  \(k)"); fflush(stdout)
+            }
+
+            // Check if timeMLP keys exist in module
+            let moduleTimeMlpKeys = allDecoderParamKeys.filter { $0.contains("timeMLP") }
+            print("DEBUG S3Gen: Module timeMLP keys (\(moduleTimeMlpKeys.count)): \(moduleTimeMlpKeys)"); fflush(stdout)
+
+            // Check a weight value before update
+            eval(self.decoder.timeMLP.linear1.weight)
+            let timeMlpWeightBefore = self.decoder.timeMLP.linear1.weight[0, 0..<5].asArray(Float.self)
+            print("DEBUG S3Gen: timeMLP.linear1.weight[0,:5] BEFORE update: \(timeMlpWeightBefore)"); fflush(stdout)
+
+            self.decoder.update(parameters: ModuleParameters.unflattened(decoderWeights))
+
+            // Check the same weight after update
+            eval(self.decoder.timeMLP.linear1.weight)
+            let timeMlpWeightAfter = self.decoder.timeMLP.linear1.weight[0, 0..<5].asArray(Float.self)
+            print("DEBUG S3Gen: timeMLP.linear1.weight[0,:5] AFTER update: \(timeMlpWeightAfter)"); fflush(stdout)
+
+            // Check if they're different
+            let changed = timeMlpWeightBefore != timeMlpWeightAfter
+            print("DEBUG S3Gen: Weights changed: \(changed)"); fflush(stdout)
+
+            print("DEBUG S3Gen: Decoder weights loaded via decoder.update()"); fflush(stdout)
+        } else {
+            print("⚠️ WARNING: No decoder weights found in flowWeights!"); fflush(stdout)
+        }
+
         print("DEBUG S3Gen: S3Gen.init COMPLETE"); fflush(stdout)
     }
 
@@ -2463,14 +2632,13 @@ public class S3Gen: Module {
             let t = MLXArray([currentT])
             FlowMatchingDecoder.debugStep = (step == 1) ? 1 : 0
 
-            // CRITICAL: Python reference shows vUncond = ALL ZEROS
-            // This can only happen if uncond mask = 0 (decoder does: output * mask)
-            // Even though flow_matching.py shows same mask, reference clearly has zero mask for uncond
+            // CFG: Conditional and unconditional passes
+            // Python flow_matching.py line 128: mask_in[:B] = mask_in[B:] = mask
+            // BOTH use SAME mask! Unconditional behavior comes from zero mu/spks/cond only.
 
             // Prepare batch for CFG: [Cond, Uncond]
-            let zeroMask = MLXArray.zeros(like: mask)
             let xIn = concatenated([xt, xt], axis: 0)
-            let maskIn = concatenated([mask, zeroMask], axis: 0)  // Uncond mask=0 to match reference!
+            let maskIn = concatenated([mask, mask], axis: 0)  // Both use same mask (match Python!)
             let muIn = concatenated([muT, MLXArray.zeros(like: muT)], axis: 0)  // Uncond mu=0
             let spkIn = concatenated([spkCond, MLXArray.zeros(like: spkCond)], axis: 0)  // Uncond spk=0
             let condIn = concatenated([condsT, MLXArray.zeros(like: condsT)], axis: 0)  // Uncond cond=0
@@ -2647,14 +2815,13 @@ public class S3Gen: Module {
             print("t=\(currentT), dt=\(dt)")
             print("xt before: range=[\(xt.min().item(Float.self)), \(xt.max().item(Float.self))], mean=\(xt.mean().item(Float.self))")
 
-            // CRITICAL: Python reference shows vUncond = ALL ZEROS
-            // This can only happen if uncond mask = 0 (decoder does: output * mask)
-            // Even though flow_matching.py shows same mask, reference clearly has zero mask for uncond
+            // CFG: Conditional and unconditional passes
+            // Python flow_matching.py line 128: mask_in[:B] = mask_in[B:] = mask
+            // BOTH use SAME mask! Unconditional behavior comes from zero mu/spks/cond only.
 
             // Prepare Batch for CFG: [Cond, Uncond]
-            let zeroMask = MLXArray.zeros(like: mask)
             let xIn = concatenated([xt, xt], axis: 0)
-            let maskIn = concatenated([mask, zeroMask], axis: 0)  // Uncond mask=0 to match reference!
+            let maskIn = concatenated([mask, mask], axis: 0)  // Both use same mask (match Python!)
             let muIn = concatenated([muT, MLXArray.zeros(like: muT)], axis: 0)  // Uncond mu=0
             let spkIn = concatenated([spkCond, MLXArray.zeros(like: spkCond)], axis: 0)  // Uncond spk=0
             let condIn = concatenated([condsT, MLXArray.zeros(like: condsT)], axis: 0)  // Uncond cond=0

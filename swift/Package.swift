@@ -20,6 +20,10 @@ let package = Package(
             name: "CrossValidate",
             targets: ["CrossValidate"]
         ),
+        .executable(
+            name: "DecoderTest",
+            targets: ["DecoderTest"]
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.21.0"),
@@ -47,6 +51,11 @@ let package = Package(
             name: "CrossValidate",
             dependencies: ["Nightingale"],
             path: "test_scripts/CrossValidate"
+        ),
+        .executableTarget(
+            name: "DecoderTest",
+            dependencies: ["Nightingale"],
+            path: "test_scripts/DecoderTest"
         ),
     ]
 )
