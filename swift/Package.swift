@@ -24,6 +24,10 @@ let package = Package(
             name: "DecoderTest",
             targets: ["DecoderTest"]
         ),
+        .executable(
+            name: "VocoderTest",
+            targets: ["VocoderTest"]
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.21.0"),
@@ -56,6 +60,11 @@ let package = Package(
             name: "DecoderTest",
             dependencies: ["Nightingale"],
             path: "test_scripts/DecoderTest"
+        ),
+        .executableTarget(
+            name: "VocoderTest",
+            dependencies: ["Nightingale"],
+            path: "test_scripts/VocoderTest"
         ),
     ]
 )
