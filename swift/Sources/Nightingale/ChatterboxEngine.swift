@@ -466,19 +466,22 @@ public actor ChatterboxEngine {
                 }
 
                 // Conv1d weight transposition:
-                // - Vocoder weights from vocoder_weights_python.safetensors: PyTorch [out, in, kernel] -> MLX [out, kernel, in]
-                // - Encoder/decoder conv weights: Already in MLX format [out, kernel, in]
-                //
-                // Vocoder prefixes that need transposition:
-                //   conv_pre, conv_post, resblocks, ups (main vocoder)
-                //   f0_predictor (F0 pitch prediction convs)
-                //   source_downs, source_resblocks (source module)
+                // ALL Conv1d weights need transposition from PyTorch [out, in, kernel] to MLX [out, kernel, in]
+                // This includes:
+                // - Decoder Conv1d layers (down_blocks, mid_block, up_blocks)
+                // - Encoder Conv1d layers (if present)
+                // - Vocoder Conv1d layers (conv_pre, conv_post, resblocks, ups, f0_predictor, source_*)
+                let isDecoderConv = key.contains("decoder") && key.hasSuffix(".weight") && w.ndim == 3 &&
+                                    !key.contains("norm") && !key.contains("embedding")
+                let isEncoderConv = key.contains("encoder") && key.hasSuffix(".weight") && w.ndim == 3 &&
+                                    !key.contains("norm") && !key.contains("embedding") && !key.contains("position")
                 let isVocoderConv = (key.hasPrefix("conv_pre") || key.hasPrefix("conv_post") ||
                                      key.hasPrefix("resblocks") || key.hasPrefix("ups") ||
                                      key.hasPrefix("f0_predictor") || key.hasPrefix("source_downs") ||
                                      key.hasPrefix("source_resblocks")) &&
                                     key.hasSuffix(".weight") && w.ndim == 3
-                if isVocoderConv {
+
+                if isDecoderConv || isEncoderConv || isVocoderConv {
                     // PyTorch Conv1d: [out_channels, in_channels, kernel_size]
                     // MLX Conv1d: [out_channels, kernel_size, in_channels]
                     w = w.transposed(0, 2, 1)

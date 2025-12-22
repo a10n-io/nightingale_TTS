@@ -84,13 +84,20 @@ for (key, value) in flowWeights {
 
         // CRITICAL: PyTorch Linear weights are [Out, In], but MLX FixedLinear expects [In, Out]
         // Transpose Linear layer weights (FixedLinear layers: TimeMLP, FeedForward, Attention)
-        // Do NOT transpose Conv1d weights - decoder convs are already in correct format
         let isLinearWeight = newKey.hasSuffix(".weight") && value.ndim == 2 &&
                             !newKey.contains("conv") && !newKey.contains("norm") && !newKey.contains("embedding")
 
+        // CRITICAL: PyTorch Conv1d weights are [Out, In, K], but MLX conv1d expects [Out, K, In]
+        // Transpose Conv1d layer weights
+        let isConv1dWeight = newKey.hasSuffix(".weight") && value.ndim == 3 &&
+                            !newKey.contains("norm") && !newKey.contains("embedding")
+
         if isLinearWeight {
             decoderWeights[newKey] = value.T
-            print("  [TRANSPOSE] \(newKey): \(value.shape) -> \(value.T.shape)")
+            print("  [TRANSPOSE Linear] \(newKey): \(value.shape) -> \(value.T.shape)")
+        } else if isConv1dWeight {
+            decoderWeights[newKey] = value.transposed(0, 2, 1)
+            print("  [TRANSPOSE Conv1d] \(newKey): \(value.shape) -> \(value.transposed(0, 2, 1).shape)")
         } else {
             decoderWeights[newKey] = value
         }
@@ -98,9 +105,32 @@ for (key, value) in flowWeights {
 }
 print("  Found \(decoderWeights.count) decoder weights")
 
+// Debug: Check a specific Conv1d weight shape BEFORE loading
+if let convWeight = decoderWeights["down_blocks.0.0.block1.block.0.weight"] {
+    eval(convWeight)
+    print("\n🔍 down_blocks.0.0.block1.block.0.weight shape BEFORE loading: \(convWeight.shape)")
+    print("  This should be [256, 3, 320] after transposition from PyTorch [256, 320, 3]")
+}
+
 // Update decoder with weights
 try decoder.update(parameters: ModuleParameters.unflattened(decoderWeights))
 print("✅ Decoder loaded")
+
+// Debug: Check if weights were loaded into decoder - inspect decoder parameters
+print("\n🔍 Checking decoder parameters after loading:")
+let decoderParams = decoder.parameters()
+let flatParams = decoderParams.flattened()
+print("  Total parameters in decoder: \(flatParams.count)")
+if let downBlock0Weight = flatParams["downBlocks.0.block1.conv.conv.weight"] {
+    eval(downBlock0Weight)
+    print("  downBlocks.0.block1.conv.conv.weight shape: \(downBlock0Weight.shape)")
+} else {
+    print("  ❌ downBlocks.0.block1.conv.conv.weight NOT FOUND in decoder parameters!")
+    print("  Sample parameter keys:")
+    for (key, _) in flatParams.prefix(20) {
+        print("    \(key)")
+    }
+}
 
 // CRITICAL: Python uses cond_T as the mask, where:
 //   cond_T[0] (conditional) has mask=0 for prompt, mask=1 for generation
