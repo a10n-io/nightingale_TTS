@@ -261,6 +261,25 @@ public actor ChatterboxEngine {
                 let s3Params = ModuleParameters.unflattened(s3Remapped)
                 s3.update(parameters: s3Params)
 
+                // DEBUG: Verify decoder and vocoder weights were loaded
+                print("DEBUG: Checking if decoder/vocoder weights were applied...")
+                let decoderKeys = s3Remapped.keys.filter { $0.hasPrefix("decoder.") }.sorted()
+                let vocoderKeys = s3Remapped.keys.filter { $0.hasPrefix("vocoder.") }.sorted()
+                print("  Decoder keys: \(decoderKeys.count)")
+                print("  Vocoder keys: \(vocoderKeys.count)")
+                if decoderKeys.count > 0 {
+                    print("  Sample decoder keys:")
+                    for key in decoderKeys.prefix(5) {
+                        print("    \(key)")
+                    }
+                }
+                if vocoderKeys.count > 0 {
+                    print("  Sample vocoder keys:")
+                    for key in vocoderKeys.prefix(5) {
+                        print("    \(key)")
+                    }
+                }
+
                 // Vocoder weights are already included in flowWeights (mel2wav.* keys)
                 // They get remapped and transposed by remapS3Keys along with everything else
 
@@ -422,10 +441,53 @@ public actor ChatterboxEngine {
     }
 
     private func remapS3Keys(_ weights: [String: MLXArray]) -> [String: MLXArray] {
+        // First pass: Combine weight_norm parametrizations
+        // PyTorch weight_norm stores: weight = direction * (magnitude / ||magnitude||)
+        // where original0 = direction, original1 = magnitude
+        var combined: [String: MLXArray] = [:]
+        var processedKeys: Set<String> = []
+
+        for (key, _) in weights {
+            if key.contains("parametrizations.weight.original0") {
+                let baseKey = key.replacingOccurrences(of: ".parametrizations.weight.original0", with: ".weight")
+                let original0Key = key
+                let original1Key = key.replacingOccurrences(of: ".original0", with: ".original1")
+
+                if let original0 = weights[original0Key], let original1 = weights[original1Key] {
+                    // PyTorch weight_norm formula:
+                    // weight = v * (g / ||v||) where v=original0 (direction), g=original1 (magnitude)
+                    // For Conv1d [out, in, kernel], norm over dims [0, 2] (keeping dim 1)
+                    let v = original0  // direction: [out, 1, 1] or [out, in, kernel]
+                    let g = original1  // magnitude: [out, in, kernel]
+                    let norm = sqrt(sum(v * v, axes: [0, 2], keepDims: true))  // [1, in, 1]
+                    let weight = v * (g / (norm + 1e-8))
+                    combined[baseKey] = weight
+                    processedKeys.insert(original0Key)
+                    processedKeys.insert(original1Key)
+                }
+            }
+        }
+
+        print("DEBUG: Combined \(combined.count) weight_norm parametrizations"); fflush(stdout)
+
+        // Second pass: Regular weights and remapping
         var remapped: [String: MLXArray] = [:]
         for (key, value) in weights {
+            // Skip parametrization keys that were combined
+            if processedKeys.contains(key) {
+                continue
+            }
+
+            // Use combined weight if available
+            let w: MLXArray
+            if let combinedWeight = combined[key] {
+                w = combinedWeight
+            } else {
+                w = value
+            }
+
             if let newKey = remapS3Key(key) {
-                var w = value
+                var finalW = w
 
                 // Transpose Linear weights from PyTorch [out, in] to MLX [in, out] format
                 // This applies to:
@@ -434,17 +496,17 @@ public actor ChatterboxEngine {
                 // - decoder Linear layers (mlp_linear, attention projections, feedforward)
                 // - time_mlp.linear_1, time_mlp.linear_2
                 // - encoder Linear layers (embed.linear, feed_forward.w_1/w_2, self_attn.linear_*)
-                let isDecoderLinear = key.contains("decoder") && key.hasSuffix(".weight") && w.ndim == 2
-                let isTimeMLP = key.contains("time_mlp") && key.contains("linear") && key.hasSuffix(".weight") && w.ndim == 2
-                let isSpkEmbedAffine = key.contains("spk_embed_affine_layer") && key.hasSuffix(".weight") && w.ndim == 2
-                let isEncoderProj = key.contains("encoder_proj") && key.hasSuffix(".weight") && w.ndim == 2
+                let isDecoderLinear = key.contains("decoder") && key.hasSuffix(".weight") && finalW.ndim == 2
+                let isTimeMLP = key.contains("time_mlp") && key.contains("linear") && key.hasSuffix(".weight") && finalW.ndim == 2
+                let isSpkEmbedAffine = key.contains("spk_embed_affine_layer") && key.hasSuffix(".weight") && finalW.ndim == 2
+                let isEncoderProj = key.contains("encoder_proj") && key.hasSuffix(".weight") && finalW.ndim == 2
                 // Encoder linear weights: embed.linear, feed_forward.w_1/w_2, self_attn.linear_*
-                let isEncoderLinear = key.contains("encoder") && key.hasSuffix(".weight") && w.ndim == 2 &&
+                let isEncoderLinear = key.contains("encoder") && key.hasSuffix(".weight") && finalW.ndim == 2 &&
                                       (key.contains(".linear") || key.contains("feed_forward.w_"))
 
                 if (isDecoderLinear || isTimeMLP || isSpkEmbedAffine || isEncoderProj || isEncoderLinear) && !key.contains(".conv.") && !key.contains("norm.") {
                     // PyTorch Linear: [out_features, in_features] -> MLX: [in_features, out_features]
-                    w = w.transposed()
+                    finalW = finalW.transposed()
                 }
 
                 // Conv1d weight transposition:
@@ -453,9 +515,9 @@ public actor ChatterboxEngine {
                 // - Decoder Conv1d layers (down_blocks, mid_block, up_blocks)
                 // - Encoder Conv1d layers (if present)
                 // - Vocoder Conv1d layers (conv_pre, conv_post, resblocks, ups, f0_predictor, source_*)
-                let isDecoderConv = key.contains("decoder") && key.hasSuffix(".weight") && w.ndim == 3 &&
+                let isDecoderConv = key.contains("decoder") && key.hasSuffix(".weight") && finalW.ndim == 3 &&
                                     !key.contains("norm") && !key.contains("embedding")
-                let isEncoderConv = key.contains("encoder") && key.hasSuffix(".weight") && w.ndim == 3 &&
+                let isEncoderConv = key.contains("encoder") && key.hasSuffix(".weight") && finalW.ndim == 3 &&
                                     !key.contains("norm") && !key.contains("embedding") && !key.contains("position")
                 // Vocoder Conv1d - keys come from mel2wav.* so use contains, not hasPrefix
                 // EXCLUDE .ups. which are ConvTranspose1d (different format)
@@ -463,35 +525,35 @@ public actor ChatterboxEngine {
                                      key.contains("resblocks") ||
                                      key.contains("f0_predictor.condnet") || key.contains("source_downs") ||
                                      key.contains("source_resblocks")) &&
-                                    key.hasSuffix(".weight") && w.ndim == 3 &&
+                                    key.hasSuffix(".weight") && finalW.ndim == 3 &&
                                     !key.contains("norm") && !key.contains(".ups.")
 
                 if isDecoderConv || isEncoderConv || isVocoderConv {
                     // PyTorch Conv1d: [out_channels, in_channels, kernel_size]
                     // MLX Conv1d: [out_channels, kernel_size, in_channels]
-                    w = w.transposed(0, 2, 1)
+                    finalW = finalW.transposed(0, 2, 1)
                 }
 
                 // ConvTranspose1d weight transposition (vocoder upsampling layers):
                 // PyTorch ConvTranspose1d: [in_channels, out_channels, kernel_size]
                 // MLX ConvTransposed1d: [out_channels, kernel_size, in_channels]
-                let isConvTranspose = key.contains(".ups.") && key.hasSuffix(".weight") && w.ndim == 3
+                let isConvTranspose = key.contains(".ups.") && key.hasSuffix(".weight") && finalW.ndim == 3
                 if isConvTranspose {
                     // PyTorch: [in, out, kernel] -> MLX: [out, kernel, in]
                     // Permute (1, 2, 0): new[0]=old[1], new[1]=old[2], new[2]=old[0]
-                    w = w.transposed(1, 2, 0)
+                    finalW = finalW.transposed(1, 2, 0)
                 }
 
                 // Vocoder Linear weight transposition:
                 // - f0_predictor.classifier.weight: (1, 512) -> (512, 1)
                 // - m_source.l_linear.weight: (1, 9) -> (9, 1)
                 let isVocoderLinear = (key.contains("f0_predictor.classifier") || key.contains("m_source.l_linear")) &&
-                                      key.hasSuffix(".weight") && w.ndim == 2
+                                      key.hasSuffix(".weight") && finalW.ndim == 2
                 if isVocoderLinear {
-                    w = w.transposed()
+                    finalW = finalW.transposed()
                 }
 
-                remapped[newKey] = w
+                remapped[newKey] = finalW
             }
         }
         return remapped
