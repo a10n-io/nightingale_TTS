@@ -723,41 +723,51 @@ public actor ChatterboxEngine {
         } else {
              throw ChatterboxError.voiceNotFound("voices/\(name) directory not found in bundle")
         }
-        
+
         if !FileManager.default.fileExists(atPath: voiceDir.path) {
              throw ChatterboxError.voiceNotFound("Voice directory not found at: \(voiceDir.path)")
         }
 
-        // Voice files are in the npy/ subdirectory
-        let npyDir = voiceDir.appendingPathComponent("npy")
-        let voiceFilesDir = FileManager.default.fileExists(atPath: npyDir.path) ? npyDir : voiceDir
-
-        // Load T3 speaker embedding from prebaked voice
-        let t3SoulURL = voiceFilesDir.appendingPathComponent("soul_t3_256.npy")
-        var t3SoulLoaded = try MLXArray.load(npy: t3SoulURL)
-        // Ensure batch dimension: [256] -> [1, 256]
-        if t3SoulLoaded.ndim == 1 {
-            t3SoulLoaded = t3SoulLoaded.expandedDimensions(axis: 0)
+        // Load from baked_voice.safetensors (unified format matching Python)
+        let voiceURL = voiceDir.appendingPathComponent("baked_voice.safetensors")
+        guard FileManager.default.fileExists(atPath: voiceURL.path) else {
+            throw ChatterboxError.voiceNotFound("baked_voice.safetensors not found at: \(voiceURL.path)")
         }
-        self.t3Soul = t3SoulLoaded
+
+        let voiceWeights = try MLX.loadArrays(url: voiceURL)
+
+        // T3 conditioning
+        guard let speakerEmb = voiceWeights["t3.speaker_emb"] else {
+            throw ChatterboxError.voiceNotFound("t3.speaker_emb not found in voice file")
+        }
+        self.t3Soul = speakerEmb
         print("T3 Soul (speaker embedding) loaded: shape \(t3Soul!.shape)")
 
-        let s3SoulURL = voiceDir.appendingPathComponent("soul_s3_192.npy")
-        self.s3Soul = try MLXArray.load(npy: s3SoulURL)
-        print("S3 Soul loaded: shape \(s3Soul!.shape)")
-
-        let condTokensURL = voiceDir.appendingPathComponent("t3_cond_tokens.npy")
-        self.t3CondTokens = try MLXArray.load(npy: condTokensURL)
+        guard let condTokens = voiceWeights["t3.cond_prompt_speech_tokens"] else {
+            throw ChatterboxError.voiceNotFound("t3.cond_prompt_speech_tokens not found in voice file")
+        }
+        self.t3CondTokens = condTokens
         print("T3 cond tokens loaded: shape \(t3CondTokens!.shape)")
 
-        let promptTokenURL = voiceDir.appendingPathComponent("prompt_token.npy")
-        self.promptToken = try MLXArray.load(npy: promptTokenURL)
+        // S3Gen conditioning
+        guard let s3Emb = voiceWeights["gen.embedding"] else {
+            throw ChatterboxError.voiceNotFound("gen.embedding not found in voice file")
+        }
+        self.s3Soul = s3Emb
+        print("S3 Soul loaded: shape \(s3Soul!.shape)")
 
-        let promptFeatURL = voiceDir.appendingPathComponent("prompt_feat.npy")
-        self.promptFeat = try MLXArray.load(npy: promptFeatURL)
+        guard let pToken = voiceWeights["gen.prompt_token"] else {
+            throw ChatterboxError.voiceNotFound("gen.prompt_token not found in voice file")
+        }
+        self.promptToken = pToken
+
+        guard let pFeat = voiceWeights["gen.prompt_feat"] else {
+            throw ChatterboxError.voiceNotFound("gen.prompt_feat not found in voice file")
+        }
+        self.promptFeat = pFeat
 
         isVoiceLoaded = true
-        print("Dual Souls injected for: \(name)")
+        print("Voice loaded from baked_voice.safetensors: \(name)")
     }
 
     // MARK: - Speech Generation

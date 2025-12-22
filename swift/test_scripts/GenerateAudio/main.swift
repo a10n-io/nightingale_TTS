@@ -180,21 +180,22 @@ let t3 = T3Model(config: T3Config.default, weights: t3Weights, ropeFreqsURL: rop
 eval(t3)
 print("  ✅ T3 model loaded")
 
-// Load voice conditioning (Samantha)
-// T3 uses files from baked_voices/<voice>/npy/
-let t3VoiceDir = URL(fileURLWithPath: "\(PROJECT_ROOT)/baked_voices/samantha/npy")
-// S3Gen uses files from baked_voices/<voice>/npy_original/
-let s3VoiceDir = URL(fileURLWithPath: "\(PROJECT_ROOT)/baked_voices/samantha/npy_original")
+// Load voice conditioning from baked_voice.safetensors (same format as Python)
+let voiceURL = URL(fileURLWithPath: "\(PROJECT_ROOT)/baked_voices/samantha/baked_voice.safetensors")
+let voiceWeights = try MLX.loadArrays(url: voiceURL)
 
-let condTokens = try NPYLoader.load(contentsOf: t3VoiceDir.appendingPathComponent("t3_cond_tokens.npy"))
-let speakerEmb = try NPYLoader.load(contentsOf: t3VoiceDir.appendingPathComponent("soul_t3_256.npy"))
-let emotionAdv = try NPYLoader.load(contentsOf: t3VoiceDir.appendingPathComponent("emotion_adv.npy"))
-let s3Embedding = try NPYLoader.load(contentsOf: s3VoiceDir.appendingPathComponent("soul_s3_192.npy"))
-let s3PromptFeat = try NPYLoader.load(contentsOf: s3VoiceDir.appendingPathComponent("prompt_feat.npy"))
-let s3PromptToken = try NPYLoader.load(contentsOf: s3VoiceDir.appendingPathComponent("prompt_token.npy"))
+// T3 conditioning
+let condTokens = voiceWeights["t3.cond_prompt_speech_tokens"]!
+let speakerEmb = voiceWeights["t3.speaker_emb"]!
+let emotionAdv = voiceWeights["t3.emotion_adv"]!
+
+// S3Gen conditioning
+let s3Embedding = voiceWeights["gen.embedding"]!
+let s3PromptFeat = voiceWeights["gen.prompt_feat"]!
+let s3PromptToken = voiceWeights["gen.prompt_token"]!
 
 eval(condTokens, speakerEmb, emotionAdv, s3Embedding, s3PromptFeat, s3PromptToken)
-print("  ✅ Voice conditioning loaded (Samantha)")
+print("  ✅ Voice conditioning loaded from baked_voice.safetensors")
 print("  DEBUG: s3PromptToken shape: \(s3PromptToken.shape)")
 print("  DEBUG: s3PromptFeat shape: \(s3PromptFeat.shape)")
 

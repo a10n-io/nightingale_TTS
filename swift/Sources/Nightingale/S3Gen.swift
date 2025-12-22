@@ -2031,7 +2031,9 @@ public class Mel2Wav: Module {
             x = xs! / 3.0
         }
 
-        x = leakyRelu(x, negativeSlope: 0.1)
+        // NOTE: Python uses F.leaky_relu(x) here (no slope arg), which defaults to 0.01
+        // The upsampling loop uses 0.1, but this final one uses PyTorch's default of 0.01
+        x = leakyRelu(x, negativeSlope: 0.01)
         x = convPost(x)  // [B, L*480, 18]
 
         // ISTFT and clip audio to [-0.99, 0.99] (matching Python line 794)
