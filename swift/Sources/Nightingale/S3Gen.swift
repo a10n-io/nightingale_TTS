@@ -2421,6 +2421,177 @@ public class S3Gen: Module {
             print("⚠️ WARNING: No decoder weights found in flowWeights!"); fflush(stdout)
         }
 
+        // =======================================================================================
+        // LOAD VOCODER WEIGHTS
+        // =======================================================================================
+        if let vocoderWeights = vocoderWeights {
+            print("DEBUG S3Gen: Loading vocoder weights..."); fflush(stdout)
+
+            var processedVocoderWeights: [String: MLXArray] = [:]
+            var transposedConv1dCount = 0
+            var transposedConvTCount = 0
+            var transposedLinearCount = 0
+            var weightNormCount = 0
+
+            // Group weight_norm parametrizations by base key
+            var weightNormGroups: [String: (original0: MLXArray?, original1: MLXArray?)] = [:]
+            var weightNormProcessedKeys: Set<String> = []  // Track which keys came from weight_norm
+
+            for (key, value) in vocoderWeights {
+                guard key.contains("mel2wav") else { continue }
+
+                // Handle weight_norm parametrizations
+                if key.contains(".parametrizations.weight.original") {
+                    // Extract base key: mel2wav.conv_pre.parametrizations.weight.original0 -> mel2wav.conv_pre
+                    let baseKey = key.replacingOccurrences(of: ".parametrizations.weight.original0", with: "")
+                                      .replacingOccurrences(of: ".parametrizations.weight.original1", with: "")
+
+                    if weightNormGroups[baseKey] == nil {
+                        weightNormGroups[baseKey] = (nil, nil)
+                    }
+
+                    if key.contains(".original0") {
+                        weightNormGroups[baseKey]!.original0 = value
+                    } else if key.contains(".original1") {
+                        weightNormGroups[baseKey]!.original1 = value
+                    }
+                    continue
+                }
+
+                // Remap non-parametrized keys
+                var remappedKey = key
+                    .replacingOccurrences(of: "s3gen.mel2wav.", with: "")
+                    .replacingOccurrences(of: "mel2wav.", with: "")
+                    .replacingOccurrences(of: "conv_pre", with: "convPre")
+                    .replacingOccurrences(of: "conv_post", with: "convPost")
+                    .replacingOccurrences(of: "f0_predictor", with: "f0Predictor")
+                    .replacingOccurrences(of: "m_source.l_linear", with: "mSource.linear")
+                    .replacingOccurrences(of: "source_downs", with: "sourceDowns")
+                    .replacingOccurrences(of: "activations1", with: "acts1")
+                    .replacingOccurrences(of: "activations2", with: "acts2")
+
+                // Map f0_predictor.condnet indices: Python uses 0,2,4,6,8 -> Swift uses 0,1,2,3,4
+                if remappedKey.contains("f0Predictor.condnet.") {
+                    remappedKey = remappedKey
+                        .replacingOccurrences(of: "condnet.0.", with: "convs.0.")
+                        .replacingOccurrences(of: "condnet.2.", with: "convs.1.")
+                        .replacingOccurrences(of: "condnet.4.", with: "convs.2.")
+                        .replacingOccurrences(of: "condnet.6.", with: "convs.3.")
+                        .replacingOccurrences(of: "condnet.8.", with: "convs.4.")
+                }
+
+                processedVocoderWeights[remappedKey] = value
+            }
+
+            // Process weight_norm groups: combine original0 and original1
+            for (baseKey, pair) in weightNormGroups {
+                guard let original0 = pair.original0, let original1 = pair.original1 else {
+                    print("⚠️ WARNING: Incomplete weight_norm pair for \(baseKey)"); fflush(stdout)
+                    continue
+                }
+
+                // Combine: weight = original0 * (original1 / ||original1||)
+                // original0: [Out, 1, 1] (magnitude scale)
+                // original1: [Out, In, Kernel] (direction)
+                let norm = sqrt((original1 * original1).sum(axes: [1, 2], keepDims: true))
+                let normalized = original1 / (norm + 1e-8)
+                let combined = original0 * normalized
+
+                // Remap key
+                var remappedKey = baseKey
+                    .replacingOccurrences(of: "s3gen.mel2wav.", with: "")
+                    .replacingOccurrences(of: "mel2wav.", with: "")
+                    .replacingOccurrences(of: "conv_pre", with: "convPre")
+                    .replacingOccurrences(of: "conv_post", with: "convPost")
+                    .replacingOccurrences(of: "f0_predictor", with: "f0Predictor")
+                    .replacingOccurrences(of: "activations1", with: "acts1")
+                    .replacingOccurrences(of: "activations2", with: "acts2")
+
+                // Map f0_predictor.condnet indices
+                if remappedKey.contains("f0Predictor.condnet.") {
+                    remappedKey = remappedKey
+                        .replacingOccurrences(of: "condnet.0", with: "convs.0")
+                        .replacingOccurrences(of: "condnet.2", with: "convs.1")
+                        .replacingOccurrences(of: "condnet.4", with: "convs.2")
+                        .replacingOccurrences(of: "condnet.6", with: "convs.3")
+                        .replacingOccurrences(of: "condnet.8", with: "convs.4")
+                }
+
+                var finalWeight = combined
+
+                // Transpose Conv1d: PyTorch [Out, In, Kernel] -> MLX [Out, Kernel, In]
+                if finalWeight.ndim == 3 && !remappedKey.contains("ups.") {
+                    let before = finalWeight.shape
+                    finalWeight = finalWeight.transposed(0, 2, 1)
+                    let after = finalWeight.shape
+                    if remappedKey.contains("convPre") || remappedKey.contains("f0Predictor") {
+                        print("DEBUG: Transposed weight_norm Conv1d \(remappedKey): \(before) -> \(after)"); fflush(stdout)
+                    }
+                    transposedConv1dCount += 1
+                }
+
+                // Transpose ConvTranspose1d: PyTorch [In, Out, Kernel] -> MLX [Out, Kernel, In]
+                if remappedKey.contains("ups.") && finalWeight.ndim == 3 {
+                    finalWeight = finalWeight.transposed(1, 2, 0)
+                    transposedConvTCount += 1
+                }
+
+                let finalKey = remappedKey + ".weight"
+                processedVocoderWeights[finalKey] = finalWeight
+                weightNormProcessedKeys.insert(finalKey)  // Track that this came from weight_norm
+                weightNormCount += 1
+            }
+
+            // Transpose non-weight_norm weights
+            for (key, value) in processedVocoderWeights {
+                guard key.hasSuffix(".weight") else { continue }
+
+                // Skip if already processed via weight_norm
+                if weightNormProcessedKeys.contains(key) {
+                    continue
+                }
+
+                var finalW = value
+
+                // Transpose Linear weights: PyTorch [Out, In] -> MLX [In, Out]
+                let isLinear = finalW.ndim == 2 && !key.contains("conv")
+                if isLinear {
+                    finalW = finalW.transposed()
+                    transposedLinearCount += 1
+                    processedVocoderWeights[key] = finalW
+                }
+
+                // Transpose Conv1d weights
+                let isConv1d = finalW.ndim == 3 && !key.contains("ups.")
+                if isConv1d {
+                    finalW = finalW.transposed(0, 2, 1)
+                    transposedConv1dCount += 1
+                    processedVocoderWeights[key] = finalW
+                }
+
+                // Transpose ConvTranspose1d weights
+                let isConvT = key.contains("ups.") && finalW.ndim == 3
+                if isConvT {
+                    finalW = finalW.transposed(1, 2, 0)
+                    transposedConvTCount += 1
+                    processedVocoderWeights[key] = finalW
+                }
+            }
+
+            print("DEBUG S3Gen: Vocoder weights processed:"); fflush(stdout)
+            print("  Total keys: \(processedVocoderWeights.count)"); fflush(stdout)
+            print("  Weight norm combined: \(weightNormCount)"); fflush(stdout)
+            print("  Conv1d transposed: \(transposedConv1dCount)"); fflush(stdout)
+            print("  ConvTranspose1d transposed: \(transposedConvTCount)"); fflush(stdout)
+            print("  Linear transposed: \(transposedLinearCount)"); fflush(stdout)
+
+            // Apply weights to vocoder
+            self.vocoder.update(parameters: ModuleParameters.unflattened(processedVocoderWeights))
+            print("DEBUG S3Gen: Vocoder weights loaded via vocoder.update()"); fflush(stdout)
+        } else {
+            print("⚠️ WARNING: No vocoder weights provided!"); fflush(stdout)
+        }
+
         print("DEBUG S3Gen: S3Gen.init COMPLETE"); fflush(stdout)
     }
 

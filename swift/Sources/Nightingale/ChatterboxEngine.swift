@@ -236,8 +236,8 @@ public actor ChatterboxEngine {
             print("Merged flow weights: \(flowWeights.count) total arrays")
 
             // s3gen.safetensors and s3gen_fp16.safetensors both include vocoder weights (mel2wav.*)
-            // No separate vocoder file needed
-            let vocoderWeights: [String: MLXArray]? = nil
+            // Extract vocoder weights from flowWeights (they have "mel2wav." or "s3gen.mel2wav." prefix)
+            let vocoderWeights = flowWeights  // S3Gen.init will filter for mel2wav keys
             print("Vocoder weights included in \(s3genURL.lastPathComponent) (mel2wav.* keys)")
 
             // Create S3Gen
