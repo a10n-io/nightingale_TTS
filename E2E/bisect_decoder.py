@@ -115,7 +115,11 @@ for i, (resnet, transformer_blocks, downsample) in enumerate(decoder.down_blocks
         debug_stats(h_resnet, "CHECKPOINT_B2_Branch_Output")
 
         # Skip connection (res_conv)
-        skip_resnet = resnet.res_conv(h * mask_down)
+        # 🔍 DEBUG: Before res_conv (x * mask)
+        x_for_res = h * mask_down
+        debug_stats(x_for_res, "DEBUG_xForRes_before_resConv")
+
+        skip_resnet = resnet.res_conv(x_for_res)
 
         # ===== MICRO-BISECTION CHECKPOINT B3: Skip Connection =====
         debug_stats(skip_resnet, "CHECKPOINT_B3_Skip")

@@ -1193,6 +1193,12 @@ public class CausalResNetBlock: Module {
         if let mask = mask {
             xForRes = x * mask  // Simple multiplication, like Python!
         }
+
+        // 🔍 DEBUG: Before resConv (x * mask)
+        if isFirstCall && FlowMatchingDecoder.debugStep > 0 {
+            debugStats(xForRes, name: "DEBUG_xForRes_before_resConv")
+        }
+
         var res = xForRes.transposed(0, 2, 1)  // [B, T, C]
         res = resConv(res)                      // [B, T, Cout]
         res = res.transposed(0, 2, 1)           // [B, Cout, T]
@@ -2596,6 +2602,16 @@ public class S3Gen: Module {
                 // Remap UNetBlock structure (down_blocks.X.0 -> downBlocks.X.resnet, etc.)
                 remappedKey = S3Gen.remapUNetBlockKeys(remappedKey)
 
+                // CRITICAL FIX: Remap ResNet's internal MLP
+                // Python: .resnet.mlp.1. (Sequential(Mish, Linear)[1] is the Linear)
+                // Swift: .resnet.mlpLinear.
+                remappedKey = remappedKey.replacingOccurrences(of: ".mlp.1.", with: ".mlpLinear.")
+
+                // CRITICAL FIX: Remap ResNet's res_conv
+                // Python: .resnet.res_conv.
+                // Swift: .resnet.resConv.
+                remappedKey = remappedKey.replacingOccurrences(of: ".res_conv.", with: ".resConv.")
+
                 // Remap CausalBlock1D internal structure:
                 // Python: .block.0. (Conv1d) -> Swift: .conv.conv.
                 // Python: .block.2. (GroupNorm) -> Swift: .norm.
@@ -2696,6 +2712,26 @@ public class S3Gen: Module {
             print("DEBUG S3Gen: downBlocks[0].transformers[0].attention.queryProj.weight[0,:5]: \(qWeight[0, 0..<5].asArray(Float.self))"); fflush(stdout)
             print("DEBUG S3Gen: downBlocks[0].transformers[0].attention.queryProj.weight range: [\(qWeight.min().item(Float.self)), \(qWeight.max().item(Float.self))]"); fflush(stdout)
             print("DEBUG S3Gen: Weights changed: \(changed)"); fflush(stdout)
+
+            // Check ResNet MLP weights (THE SMOKING GUN)
+            print("DEBUG S3Gen: About to check ResNet MLP weights..."); fflush(stdout)
+            let resnet0 = self.decoder.downBlocks[0].resnet
+            print("DEBUG S3Gen: Got resnet0"); fflush(stdout)
+            eval(resnet0.mlpLinear.weight)
+            print("DEBUG S3Gen: Evaluated mlpLinear.weight"); fflush(stdout)
+            let mlpW = resnet0.mlpLinear.weight
+            print("DEBUG S3Gen: 🔍 ResNet[0] MLP Weight Shape: \(mlpW.shape) (should be [1024, 256])"); fflush(stdout)
+            print("DEBUG S3Gen: 🔍 ResNet[0] MLP weight[0,:5]: \(mlpW[0, 0..<5].asArray(Float.self))"); fflush(stdout)
+            print("DEBUG S3Gen: 🔍 ResNet[0] MLP weight[:5,0]: \(mlpW[0..<5, 0].asArray(Float.self))"); fflush(stdout)
+            print("DEBUG S3Gen: 🔍 Expected [0,:5] = [0.0115, 0.0138, -0.0350, 0.0076, -0.0255]"); fflush(stdout)
+            print("DEBUG S3Gen: 🔍 Expected [:5,0] = [0.0115, 0.0098, -0.0121, -0.0090, 0.0022]"); fflush(stdout)
+
+            // Check ResNet resConv weights
+            print("DEBUG S3Gen: Checking ResNet resConv weights..."); fflush(stdout)
+            eval(resnet0.resConv.weight)
+            let resConvW = resnet0.resConv.weight
+            print("DEBUG S3Gen: 🔍 ResNet[0] resConv Weight Shape: \(resConvW.shape)"); fflush(stdout)
+            print("DEBUG S3Gen: 🔍 ResNet[0] resConv weight[0,0,:]: \(resConvW[0, 0, 0..<min(5, resConvW.shape[2])].asArray(Float.self))"); fflush(stdout)
 
             print("DEBUG S3Gen: Decoder weights loaded via decoder.update()"); fflush(stdout)
         } else {
