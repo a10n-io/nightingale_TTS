@@ -62,9 +62,22 @@ let package = Package(
             path: "test_scripts/DecoderTest"
         ),
         .executableTarget(
+            name: "TimeEmbeddingTest",
+            dependencies: [
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXRandom", package: "mlx-swift"),
+            ],
+            path: "test_scripts/TimeEmbeddingTest"
+        ),
+        .executableTarget(
             name: "VocoderTest",
             dependencies: ["Nightingale"],
             path: "test_scripts/VocoderTest"
+        ),
+        .executableTarget(
+            name: "DeterministicTest",
+            dependencies: ["Nightingale"],
+            path: "test_scripts/DeterministicTest"
         ),
     ]
 )
