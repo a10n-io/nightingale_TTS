@@ -1280,9 +1280,24 @@ public actor ChatterboxEngine {
             throw ChatterboxError.modelNotLoaded
         }
 
-        print("Running S3Gen with \(tokens.count) tokens...")
+        // Drop invalid tokens (SOS 6561, EOS 6562) that would corrupt S3Gen
+        let minToken = tokens.min() ?? 0
+        let maxToken = tokens.max() ?? 0
+        print("DEBUG: Input tokens range: [\(minToken), \(maxToken)], count: \(tokens.count)")
 
-        let tokensArray = MLXArray(tokens.map { Int32($0) }).expandedDimensions(axis: 0)
+        let cleanedTokens = T3Model.dropInvalidTokens(tokens)
+
+        if cleanedTokens.count != tokens.count {
+            let dropped = tokens.count - cleanedTokens.count
+            print("DEBUG: Dropped \(dropped) invalid tokens (SOS/EOS)")
+            let cleanMinToken = cleanedTokens.min() ?? 0
+            let cleanMaxToken = cleanedTokens.max() ?? 0
+            print("DEBUG: Cleaned tokens range: [\(cleanMinToken), \(cleanMaxToken)], count: \(cleanedTokens.count)")
+        }
+
+        print("Running S3Gen with \(cleanedTokens.count) tokens...")
+
+        let tokensArray = MLXArray(cleanedTokens.map { Int32($0) }).expandedDimensions(axis: 0)
 
         GPU.clearCache()
 
