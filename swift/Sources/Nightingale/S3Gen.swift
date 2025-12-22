@@ -1021,6 +1021,48 @@ public class UpsampleEncoder: Module {
 
 // MARK: - Flow Blocks (Decoder)
 
+// Helper: Apply mask smartly - skip batch elements with all-zero masks (CFG unconditional)
+func applyMaskSmartGlobal(_ h: MLXArray, _ mask: MLXArray?, debug: Bool = false) -> MLXArray {
+    guard let m = mask else { return h }
+
+    let B = h.shape[0]
+    if debug {
+        print("applyMaskSmart: h.shape=\(h.shape), mask.shape=\(m.shape), B=\(B)")
+    }
+    if B == 1 {
+        // Single batch element - apply mask normally
+        return h * m
+    } else {
+        // Multiple batch elements - check each one
+        var result = h
+        for b in 0..<B {
+            let maskSum = m[b].sum().item(Float.self)
+            if debug {
+                eval(h[b])
+                print("applyMaskSmart: batch[\(b)] maskSum=\(maskSum), h range=[\(h[b].min().item(Float.self)), \(h[b].max().item(Float.self))]")
+            }
+            if maskSum > 0 {
+                // This batch element has a non-zero mask - apply it
+                result[b] = h[b] * m[b]
+                if debug {
+                    eval(result[b])
+                    print("applyMaskSmart: batch[\(b)] MASKED, result range=[\(result[b].min().item(Float.self)), \(result[b].max().item(Float.self))]")
+                }
+            } else {
+                if debug {
+                    print("applyMaskSmart: batch[\(b)] SKIPPED masking (unconditional pass)")
+                }
+            }
+            // If maskSum == 0, skip masking (CFG unconditional pass)
+        }
+        if debug {
+            eval(result)
+            print("applyMaskSmart: final result range=[\(result.min().item(Float.self)), \(result.max().item(Float.self))]")
+        }
+        return result
+    }
+}
+
 public class CausalBlock1D: Module {
     public let conv: CausalConv1d
     public let norm: LayerNorm
@@ -1047,7 +1089,7 @@ public class CausalBlock1D: Module {
                 print("CAUSALBLOCK1D: h BEFORE mask: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]")
                 fflush(stdout)
             }
-            h = h * mask
+            h = applyMaskSmartGlobal(h, mask)
             if CausalBlock1D.debugCalls {
                 eval(h)
                 print("CAUSALBLOCK1D: h AFTER mask: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]")
@@ -1065,7 +1107,7 @@ public class CausalBlock1D: Module {
 
         // Multiply output by mask (Python line 62)
         if let mask = mask {
-            h = h * mask
+            h = applyMaskSmartGlobal(h, mask)
         }
 
         return h
@@ -1106,7 +1148,7 @@ public class CausalResNetBlock: Module {
         // Python code: h_masked = h_mish2 * mask; h_res = conv(x); return h_masked + h_res
         // Apply mask to h AFTER block2, NOT to x before res_conv
         if let mask = mask {
-            h = h * mask
+            h = applyMaskSmartGlobal(h, mask)
             if CausalResNetBlock.debugEnabled { eval(h); print("RESNET h * mask: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]") }
         }
 
@@ -1396,7 +1438,38 @@ public class FlowMatchingDecoder: Module {
 
         if debug {
             print("DEC: useMask=\(useMask), mask?.shape = \(mask?.shape ?? [0])")
+            if let m = mask {
+                eval(m)
+                let B = m.shape[0]
+                for b in 0..<B {
+                    let maskSum = m[b].sum().item(Float.self)
+                    print("DEC: mask[\(b)] sum = \(maskSum)")
+                }
+            }
             fflush(stdout)
+        }
+
+        // Helper: Apply mask smartly - skip batch elements with all-zero masks (CFG unconditional)
+        func applyMaskSmart(_ h: MLXArray, _ mask: MLXArray?) -> MLXArray {
+            guard let m = mask else { return h }
+
+            let B = h.shape[0]
+            if B == 1 {
+                // Single batch element - apply mask normally
+                return h * m
+            } else {
+                // Multiple batch elements - check each one
+                var result = h
+                for b in 0..<B {
+                    let maskSum = m[b].sum().item(Float.self)
+                    if maskSum > 0 {
+                        // This batch element has a non-zero mask - apply it
+                        result[b] = h[b] * m[b]
+                    }
+                    // If maskSum == 0, skip masking (CFG unconditional pass)
+                }
+                return result
+            }
         }
 
         // Only create mask tracking if mask is provided
@@ -1514,9 +1587,15 @@ public class FlowMatchingDecoder: Module {
         }
 
         let up = upBlocks[0]
-        if debug { CausalResNetBlock.debugEnabled = true }
+        if debug {
+            CausalResNetBlock.debugEnabled = true
+            CausalBlock1D.debugCalls = true  // Enable debug for up block too
+        }
         h = up.resnet(h, mask: maskFull, timeEmb: tEmb)  // Use FULL mask (h is at full res after concat)
-        if debug { CausalResNetBlock.debugEnabled = false }
+        if debug {
+            CausalResNetBlock.debugEnabled = false
+            CausalBlock1D.debugCalls = false
+        }
         if debug { eval(h); print("DEC after up.resnet: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]") }
         h = h.transposed(0, 2, 1)
         // Recreate attention mask for full resolution (after concat)
@@ -1524,31 +1603,38 @@ public class FlowMatchingDecoder: Module {
         attnMask = makeAttentionMask(fullL, paddingMask: maskFull)
         for tfmr in up.transformers { h = tfmr(h, mask: attnMask) }
         h = h.transposed(0, 2, 1)
+        if debug { eval(h); print("DEC after up.transformers: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]") }
         // Python applies mask before upsample (only if using mask)
         if let ul = up.upLayer {
             if useMask, let mf = maskFull {
-                h = ul(h * mf)
+                if debug { print("DEC: About to call applyMaskSmart before upLayer") }
+                let hMasked = applyMaskSmartGlobal(h, mf, debug: debug)
+                h = ul(hMasked)
             } else {
                 h = ul(h)
             }
+            if debug { eval(h); print("DEC after up.upLayer: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]") }
         }
 
         // After upsampling, h is back to full resolution - use full mask (or nil)
         h = finalBlock(h, mask: maskFull) // [B, C, T] output
+        if debug { eval(h); print("DEC after finalBlock: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]") }
 
         // Python multiplies by mask before final_proj: output = self.final_proj(x * mask_up)
         if useMask, let mf = maskFull {
-            h = h * mf
+            h = applyMaskSmart(h, mf)
+            if debug { eval(h); print("DEC after mask (before finalProj): [\(h.min().item(Float.self)), \(h.max().item(Float.self))]") }
         }
 
         // Final Proj: MLX Conv1d expects input as [B, T, C] (channels LAST!)
         h = h.transposed(0, 2, 1) // [B, C, T] → [B, T, C]
         h = finalProj(h)          // [B, T, 80]
         h = h.transposed(0, 2, 1) // [B, T, 80] → [B, 80, T]
+        if debug { eval(h); print("DEC after finalProj: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]") }
 
         // Python multiplies by mask after final_proj: return output * mask
         if useMask, let mf = maskFull {
-            h = h * mf
+            h = applyMaskSmart(h, mf)
         }
 
         if debug {
