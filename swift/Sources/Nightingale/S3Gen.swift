@@ -2174,8 +2174,20 @@ public class Mel2Wav: Module {
     public static var debugEnabled: Bool = false
 
     public func callAsFunction(_ mel: MLXArray) -> MLXArray {
+        if Mel2Wav.debugEnabled {
+            eval(mel)
+            print("🔍 VOC INPUT: mel.shape = \(mel.shape)")
+            print("   Expected from decoder: [B, 80, T] (channels first)")
+        }
+
         // mel: [B, 80, L] -> [B, L, 80]
         var x = mel.transposed(0, 2, 1)
+
+        if Mel2Wav.debugEnabled {
+            eval(x)
+            print("🔍 VOC AFTER TRANSPOSE: x.shape = \(x.shape)")
+            print("   Should be: [B, T, 80] (channels last for MLX Conv1d)")
+        }
 
         // F0 Prediction
         let f0 = f0Predictor(x) // [B, T]

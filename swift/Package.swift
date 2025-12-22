@@ -79,5 +79,10 @@ let package = Package(
             dependencies: ["Nightingale"],
             path: "test_scripts/DeterministicTest"
         ),
+        .executableTarget(
+            name: "VocoderShapeTest",
+            dependencies: ["Nightingale"],
+            path: "test_scripts/VocoderShapeTest"
+        ),
     ]
 )
