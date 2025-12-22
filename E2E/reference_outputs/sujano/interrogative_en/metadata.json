@@ -1,9 +1,0 @@
-{
-  "voice": "sujano",
-  "sentence_id": "interrogative",
-  "text": "Do you think the model can handle the rising intonation at the end of this sentence?",
-  "language": "en",
-  "seed": 42,
-  "temperature": 0.001,
-  "device": "mps"
-}

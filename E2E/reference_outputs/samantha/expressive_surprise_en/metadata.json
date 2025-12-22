@@ -1,9 +1,0 @@
-{
-  "voice": "samantha",
-  "sentence_id": "expressive_surprise",
-  "text": "Wow! I absolutely cannot believe that it worked on the first try!",
-  "language": "en",
-  "seed": 42,
-  "temperature": 0.001,
-  "device": "mps"
-}

@@ -728,8 +728,12 @@ public actor ChatterboxEngine {
              throw ChatterboxError.voiceNotFound("Voice directory not found at: \(voiceDir.path)")
         }
 
+        // Voice files are in the npy/ subdirectory
+        let npyDir = voiceDir.appendingPathComponent("npy")
+        let voiceFilesDir = FileManager.default.fileExists(atPath: npyDir.path) ? npyDir : voiceDir
+
         // Load T3 speaker embedding from prebaked voice
-        let t3SoulURL = voiceDir.appendingPathComponent("soul_t3_256.npy")
+        let t3SoulURL = voiceFilesDir.appendingPathComponent("soul_t3_256.npy")
         var t3SoulLoaded = try MLXArray.load(npy: t3SoulURL)
         // Ensure batch dimension: [256] -> [1, 256]
         if t3SoulLoaded.ndim == 1 {

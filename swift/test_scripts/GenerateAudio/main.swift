@@ -175,7 +175,7 @@ let t3RawWeights = try MLX.loadArrays(url: t3URL)
 let t3Weights = remapT3Keys(t3RawWeights)  // Remap Python key names to Swift
 print("  Remapped \(t3Weights.count) T3 weights")
 // Also load pre-computed RoPE frequencies for exact Python match
-let ropeURL = modelDir.appendingPathComponent("mlx/rope_freqs.npy")
+let ropeURL = modelDir.appendingPathComponent("mlx/rope_freqs_llama3.safetensors")
 let t3 = T3Model(config: T3Config.default, weights: t3Weights, ropeFreqsURL: ropeURL)
 eval(t3)
 print("  ✅ T3 model loaded")
@@ -198,19 +198,17 @@ print("  ✅ Voice conditioning loaded (Samantha)")
 print("  DEBUG: s3PromptToken shape: \(s3PromptToken.shape)")
 print("  DEBUG: s3PromptFeat shape: \(s3PromptFeat.shape)")
 
-// Load S3Gen (reuse loading logic from VerifyLive)
-// Load FULL S3Gen weights (encoder + decoder + embeddings)
-let flowURL = modelDir.appendingPathComponent("mlx/s3gen_fp16.safetensors")
-let vocoderURL = modelDir.appendingPathComponent("mlx/vocoder_weights.safetensors")
-// CRITICAL: Use decoder_weights.safetensors with PROVEN remapDecoderKey from VerifyDecoderLayerByLayer
-let decoderWeightsURL = modelDir.appendingPathComponent("chatterbox/decoder_weights.safetensors")
+// Load S3Gen - use SAME s3gen.safetensors as Python
+// Contains: flow.* (encoder+decoder), mel2wav.* (vocoder)
+let s3genURL = modelDir.appendingPathComponent("chatterbox/s3gen.safetensors")
 
 // PROVEN remapDecoderKey from VerifyDecoderLayerByLayer (achieved RMSE 1.12e-06)
 func remapDecoderKey(_ key: String) -> String {
     var k = key
 
-    // Remove prefix
+    // Remove prefix - handle both s3gen.safetensors (flow.decoder.*) and legacy format
     k = k.replacingOccurrences(of: "s3gen.flow.decoder.", with: "")
+    k = k.replacingOccurrences(of: "flow.decoder.", with: "")
     k = k.replacingOccurrences(of: "estimator.", with: "")
 
     // Block names with underscore conversion
@@ -288,11 +286,16 @@ func remapDecoderKey(_ key: String) -> String {
 func remapS3Key(_ key: String) -> String? {
     var k = key
 
-    // Strip "s3gen.flow." prefix if present
+    // Strip prefixes
     if k.hasPrefix("s3gen.flow.") {
         k = k.replacingOccurrences(of: "s3gen.flow.", with: "")
     } else if k.hasPrefix("flow.") {
         k = k.replacingOccurrences(of: "flow.", with: "")
+    }
+
+    // Handle mel2wav.* vocoder keys from s3gen.safetensors
+    if k.hasPrefix("mel2wav.") {
+        k = k.replacingOccurrences(of: "mel2wav.", with: "")
     }
 
     if k.hasPrefix("conv_pre") || k.hasPrefix("conv_post") || k.hasPrefix("resblocks") || k.hasPrefix("ups") {
@@ -379,43 +382,37 @@ func remapS3Keys(_ weights: [String: MLXArray], transposeConv1d: Bool = false) -
     return remapped
 }
 
-// Load weights FIRST before initializing S3Gen
-print("Loading flow weights from: \(flowURL)")
-let flowWeights = try MLX.loadArrays(url: flowURL)
-print("  Loaded \(flowWeights.count) flow weight tensors")
-
-print("Loading vocoder weights from: \(vocoderURL)")
-let vocoderWeights = try MLX.loadArrays(url: vocoderURL)
-print("  Loaded \(vocoderWeights.count) vocoder weight tensors")
+// Load ALL weights from s3gen.safetensors (same file Python uses)
+// Contains: flow.* (encoder+decoder), mel2wav.* (vocoder)
+print("Loading weights from: \(s3genURL)")
+let flowWeights = try MLX.loadArrays(url: s3genURL)
+print("  Loaded \(flowWeights.count) weight tensors")
 
 // Debug: Print mSource keys being remapped
 print("  DEBUG: Checking mSource key remapping...")
-for key in vocoderWeights.keys where key.contains("m_source") {
-    if let remapped = remapS3Key(key), let value = vocoderWeights[key] {
+for key in flowWeights.keys where key.contains("m_source") {
+    if let remapped = remapS3Key(key), let value = flowWeights[key] {
         print("    '\(key)' -> '\(remapped)' (shape \(value.shape))")
     }
 }
 
-// Initialize S3Gen with PROPER weights (not empty dict)
-// S3Gen.init will handle encoder weight remapping internally
+// Initialize S3Gen with encoder weights
 print("Initializing S3Gen with flowWeights...")
 var s3gen = S3Gen(flowWeights: flowWeights, vocoderWeights: nil)
 
-// Load vocoder weights via update (vocoder doesn't need special init handling)
-// CRITICAL: vocoder safetensors ALSO has Conv1d in MLX format - do NOT transpose
-print("Loading vocoder weights via update()...")
-s3gen.update(parameters: ModuleParameters.unflattened(remapS3Keys(vocoderWeights, transposeConv1d: false)))
+// Load vocoder weights from same file (mel2wav.* keys)
+// The remapS3Key function handles mel2wav.* -> vocoder.* mapping
+print("Loading vocoder weights from s3gen.safetensors (mel2wav.* keys)...")
+s3gen.update(parameters: ModuleParameters.unflattened(remapS3Keys(flowWeights, transposeConv1d: true)))
 
-// CRITICAL: Load decoder weights from decoder_weights.safetensors using PROVEN remapDecoderKey
-// This approach achieved RMSE 1.12e-06 in VerifyDecoderLayerByLayer
-print("Loading decoder weights from decoder_weights.safetensors (PROVEN approach)...")
-let rawDecoderWeights = try MLX.loadArrays(url: decoderWeightsURL)
-print("  Loaded \(rawDecoderWeights.count) raw decoder weight tensors")
+// Load decoder weights from s3gen.safetensors (same file as Python uses)
+// Using PROVEN remapDecoderKey approach that achieved RMSE 1.12e-06
+print("Loading decoder weights from s3gen.safetensors...")
 
 // Apply PROVEN remapping and transposition from VerifyDecoderLayerByLayer
 var decoderWeightsRemapped: [String: MLXArray] = [:]
-for (key, value) in rawDecoderWeights {
-    if key.hasPrefix("s3gen.flow.decoder.") {
+for (key, value) in flowWeights {
+    if key.hasPrefix("flow.decoder.") {
         let newKey = remapDecoderKey(key)
 
         // CRITICAL: PyTorch Linear weights are [Out, In], but MLX Linear expects [In, Out]
