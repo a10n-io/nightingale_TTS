@@ -201,7 +201,7 @@ print("  DEBUG: s3PromptFeat shape: \(s3PromptFeat.shape)")
 // Load S3Gen (reuse loading logic from VerifyLive)
 // Load FULL S3Gen weights (encoder + decoder + embeddings)
 let flowURL = modelDir.appendingPathComponent("mlx/s3gen_fp16.safetensors")
-let vocoderURL = modelDir.appendingPathComponent("mlx/vocoder_weights_fixed_v2.safetensors")
+let vocoderURL = modelDir.appendingPathComponent("mlx/vocoder_weights.safetensors")
 // CRITICAL: Use decoder_weights.safetensors with PROVEN remapDecoderKey from VerifyDecoderLayerByLayer
 let decoderWeightsURL = modelDir.appendingPathComponent("chatterbox/decoder_weights.safetensors")
 
