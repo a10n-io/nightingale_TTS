@@ -137,15 +137,18 @@ print("\n" + String(repeating: "=", count: 80))
 print("TEST 2: UNCONDITIONAL PASS (mask=Python zeros)")
 print(String(repeating: "=", count: 80))
 
-// CRITICAL: Python's unconditional pass:
-//   mu = SAME as conditional
-//   spk = SAME as conditional
-//   cond = ZEROS
-//   mask = ALL ZEROS (Python's cond_T[1])
+// CRITICAL: Python's unconditional pass CFG setup (flow_matching.py lines 127-132):
+//   x_in[B:] = x         ← SAME as conditional
+//   mask_in[B:] = mask   ← SAME as conditional
+//   mu_in[B:] = NOT SET  ← Remains ZEROS from initialization!
+//   spks_in[B:] = NOT SET ← Remains ZEROS from initialization!
+//   cond_in[B:] = NOT SET ← Remains ZEROS from initialization!
 let zeroCond = MLXArray.zeros(like: refCond)
+let zeroMu = MLXArray.zeros(like: refMu)
+let zeroSpk = MLXArray.zeros(like: refSpk)
 
 FlowMatchingDecoder.debugStep = 1
-let swiftVUncond = decoder(x: refX, mu: refMu, t: refT, speakerEmb: refSpk, cond: zeroCond, mask: maskUncondPython)
+let swiftVUncond = decoder(x: refX, mu: zeroMu, t: refT, speakerEmb: zeroSpk, cond: zeroCond, mask: maskUncondPython)
 eval(swiftVUncond)
 
 print("\n📊 Unconditional output comparison:")
