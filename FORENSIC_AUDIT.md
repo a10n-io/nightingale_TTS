@@ -161,11 +161,21 @@ Matching: 0/98 (0.0%)
 
 ---
 
+## Code Cleanup
+
+Removed `NPYLoader.swift` (269 lines of dead code):
+- Never used anywhere in codebase
+- No .npy files in models directory
+- All loading goes through `MLX.loadArrays()` for .safetensors
+
+---
+
 ## Conclusion
 
-✅ **File Loading:** Correct
-✅ **Weight Transposition:** Correct
-✅ **Weight Application:** Correct (weights are present in modules)
+✅ **File Loading:** Correct - Only .safetensors files used, same as Python
+✅ **Weight Transposition:** Correct - All layer types handled properly
+✅ **Weight Application:** Correct - Weights present in modules and match Python
+✅ **No Legacy Files:** No .npy, .bin, or hardcoded weights
 ❌ **Forward Pass Logic:** Broken (produces wrong outputs despite correct weights)
 
 The issue is NOT in weight loading but in the decoder/encoder forward pass implementation.
