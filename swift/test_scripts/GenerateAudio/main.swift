@@ -195,6 +195,8 @@ let s3PromptToken = try NPYLoader.load(contentsOf: s3VoiceDir.appendingPathCompo
 
 eval(condTokens, speakerEmb, emotionAdv, s3Embedding, s3PromptFeat, s3PromptToken)
 print("  ✅ Voice conditioning loaded (Samantha)")
+print("  DEBUG: s3PromptToken shape: \(s3PromptToken.shape)")
+print("  DEBUG: s3PromptFeat shape: \(s3PromptFeat.shape)")
 
 // Load S3Gen (reuse loading logic from VerifyLive)
 // Load FULL S3Gen weights (encoder + decoder + embeddings)
@@ -274,9 +276,20 @@ func remapS3Keys(_ weights: [String: MLXArray], transposeConv1d: Bool = false) -
             if isLinear {
                 remapped[newKey] = value.T
             } else if isConv1d {
-                // CRITICAL: s3gen_fp16.safetensors has weights ALREADY in MLX format [out, kernel, in]
-                // Do NOT transpose! The file was pre-converted for MLX.
-                remapped[newKey] = value
+                // Only auto-detect and transpose if transposeConv1d is true
+                // For pre-converted weights (like vocoder), pass transposeConv1d: false
+                if transposeConv1d {
+                    // PyTorch Conv1d: [out, in, kernel] where in > kernel usually
+                    // MLX Conv1d: [out, kernel, in] where kernel < in usually
+                    // Detect format by comparing middle vs last dimension
+                    let dim1 = value.shape[1]
+                    let dim2 = value.shape[2]
+                    let needsTranspose = dim1 > dim2  // PyTorch has larger middle dim (in_channels)
+                    remapped[newKey] = needsTranspose ? value.swappedAxes(1, 2) : value
+                } else {
+                    // Don't transpose - weights already in correct format
+                    remapped[newKey] = value
+                }
             } else {
                 remapped[newKey] = value
             }
@@ -331,7 +344,8 @@ for key in decoderOnlyWeights.keys where key.contains("final_proj") {
 }
 // CRITICAL: s3gen_fp16.safetensors ALREADY has Conv1d in MLX format [out,kernel,in]
 // Do NOT transpose! The file was pre-converted for MLX.
-let remappedDecoderWeights = remapS3Keys(decoderOnlyWeights, transposeConv1d: false)
+// Decoder weights need auto-detection transpose (mix of PyTorch and pre-converted formats)
+let remappedDecoderWeights = remapS3Keys(decoderOnlyWeights, transposeConv1d: true)
 print("  After remapping: \(remappedDecoderWeights.count) decoder keys")
 print("  Sample remapped keys:")
 for key in Array(remappedDecoderWeights.keys.sorted().prefix(5)) {
@@ -386,8 +400,49 @@ for key in Array(decoderWeightsNoPrefix.keys.sorted().prefix(5)) {
     print("    \(key)")
 }
 
+// DEBUG: Check Conv1d weight shapes in the dict before loading
+for (key, value) in decoderWeightsNoPrefix {
+    if key.contains("downBlocks.0") && key.contains(".conv.") && key.hasSuffix(".weight") && value.ndim == 3 {
+        eval(value)
+        print("  DEBUG Conv1d in dict: \(key) → shape \(value.shape)")
+    }
+}
+
+// CRITICAL: Transpose ALL FixedLinear weights from PyTorch [out, in] to MLX [in, out]
+// This includes:
+// - timeMLP.linear_1, timeMLP.linear_2
+// - ResNet mlp.1.weight (mlpLinear)
+// - Attention projections (queryProj, keyProj, valueProj, outProj)
+// - Feedforward layers (FlowMLP layers[0], layers[1])
+// BUT NOT LayerNorm weights, embeddings, or Conv1d weights
+var transposedDecoderWeights: [String: MLXArray] = [:]
+for (key, value) in decoderWeightsNoPrefix {
+    // Transpose ALL Linear/FixedLinear weights (2D, excluding LayerNorm and embeddings)
+    // LayerNorm weights don't have "linear" or "Proj" or "mlp" or "layers" in their key
+    // Embeddings would be handled separately
+    let is2DWeight = key.hasSuffix(".weight") && value.ndim == 2
+    let isLinearLayer = is2DWeight && (
+        key.contains("timeMLP.linear") ||      // TimeMLP linear layers
+        key.contains(".mlp.") ||               // ResNet MLP layers (mlpLinear)
+        key.contains("Proj.weight") ||         // Attention projections (queryProj, keyProj, etc.)
+        key.contains(".layers.") ||            // FlowMLP feedforward layers
+        key.contains(".ff.layers.")            // Alternative FF layer naming
+    )
+
+    // Explicitly exclude LayerNorm, GroupNorm, embeddings
+    let isNormLayer = key.contains(".norm") && !key.contains(".norm.") // Avoid false positives like "norm1.weight"
+    let shouldTranspose = isLinearLayer && !isNormLayer
+
+    if shouldTranspose {
+        transposedDecoderWeights[key] = value.T
+        print("  Transposed \(key): \(value.shape) -> \(value.T.shape)")
+    } else {
+        transposedDecoderWeights[key] = value
+    }
+}
+
 // Load directly to decoder
-s3gen.decoder.update(parameters: ModuleParameters.unflattened(decoderWeightsNoPrefix))
+s3gen.decoder.update(parameters: ModuleParameters.unflattened(transposedDecoderWeights))
 
 // DEBUG: Check the same decoder weight AFTER update
 if let firstWeight = s3gen.decoder.downBlocks[0].resnet.block1.norm.weight {
@@ -470,26 +525,42 @@ if let eotToken = vocab["<|endoftranscript|>"] { tokens.append(eotToken) }
 let textTokens = MLXArray(tokens.map { Int32($0) }).expandedDimensions(axis: 0)
 print("  Tokens: \(tokens.count)")
 
-// T3 Generation - match Python settings for deterministic output
-// Note: Using maxTokens=100 to match Python output (Python generated 98 tokens)
-print("  Generating speech tokens (temp=0.001, topP=1.0, repPen=2.0, maxTokens=100)...")
-let speechTokensRaw = t3.generate(
-    textTokens: textTokens,
-    speakerEmb: speakerEmb,
-    condTokens: condTokens,
-    maxTokens: 100,  // Match Python: generates ~98 tokens for this length text
-    temperature: 0.001,  // Match Python's near-deterministic sampling
-    emotionValue: emotionAdv[0, 0].item(Float.self),
-    cfgWeight: 0.5,
-    repetitionPenalty: 2.0,  // Match Python's repetition penalty
-    topP: 1.0,  // Match Python (no nucleus sampling)
-    minP: 0.05
-)
-var speechTokensClean = speechTokensRaw.filter { $0 != 6561 && $0 != 6562 }
-if speechTokensClean.isEmpty { speechTokensClean = [1] }
-let speechTokens = MLXArray(speechTokensClean.map { Int32($0) }).expandedDimensions(axis: 0)
+// CROSS-TEST MODE: Use Python tokens instead of generating with Swift T3
+let usePythonTokens = true  // Set to true to test Python tokens → Swift audio
+let pythonTokens = [1732, 2068, 2186, 1457, 680, 1460, 3647, 5834, 5915, 5266, 5509, 5429, 3242, 569, 572, 599, 683, 719, 1448, 2087, 1976, 1946, 3890, 5192, 4814, 1277, 1736, 3650, 6077, 4780, 2163, 4752, 6377, 6373, 4771, 5014, 5015, 2021, 2020, 4448, 2671, 2112, 411, 2517, 5109, 5838, 5845, 5837, 2367, 4718, 6238, 1226, 2145, 1431, 5006, 3479, 1288, 2267, 5021, 4778, 1855, 4194, 2246, 193, 157, 1679, 2096, 4373, 4349, 6050, 1686, 1032, 2331, 5672, 586, 3990, 38, 4032, 6534, 4320, 4106, 3863, 3146, 4671, 5648, 627, 5325, 1620, 1892, 1865, 5510, 4789, 5186, 731, 734, 737, 116, 386]
+
+let speechTokens: MLXArray
+if usePythonTokens {
+    print("  🔄 Using Python-generated tokens for cross-test")
+    speechTokens = MLXArray(pythonTokens.map { Int32($0) }).expandedDimensions(axis: 0)
+    print("  Loaded \(pythonTokens.count) Python tokens")
+} else {
+    // T3 Generation - match Python settings for deterministic output
+    // Note: Using maxTokens=100 to match Python output (Python generated 98 tokens)
+    print("  Generating speech tokens (temp=0.001, topP=1.0, repPen=2.0, maxTokens=100)...")
+    let speechTokensRaw = t3.generate(
+        textTokens: textTokens,
+        speakerEmb: speakerEmb,
+        condTokens: condTokens,
+        maxTokens: 100,  // Match Python: generates ~98 tokens for this length text
+        temperature: 0.001,  // Match Python's near-deterministic sampling
+        emotionValue: emotionAdv[0, 0].item(Float.self),
+        cfgWeight: 0.5,
+        repetitionPenalty: 2.0,  // Match Python's repetition penalty
+        topP: 1.0,  // Match Python (no nucleus sampling)
+        minP: 0.05
+    )
+    var speechTokensClean = speechTokensRaw.filter { $0 != 6561 && $0 != 6562 }
+    if speechTokensClean.isEmpty { speechTokensClean = [1] }
+    speechTokens = MLXArray(speechTokensClean.map { Int32($0) }).expandedDimensions(axis: 0)
+    print("  Generated \(speechTokensClean.count) speech tokens")
+}
 eval(speechTokens)
-print("  Generated \(speechTokensClean.count) speech tokens")
+
+// Save tokens for cross-testing with Python (only when using Swift tokens)
+let tokensSaveURL = URL(fileURLWithPath: "\(PROJECT_ROOT)/E2E/swift_generated_tokens.safetensors")
+try MLX.save(arrays: ["tokens": speechTokens], url: tokensSaveURL)
+print("  ✅ Saved Swift tokens to E2E/swift_generated_tokens.safetensors")
 
 // S3Gen - SKIP VOCODER, JUST GET MEL
 print("  Running S3Gen (just encoder+ODE, no vocoder)...")
@@ -555,7 +626,8 @@ if lowEnergy > highEnergy {
 }
 
 // Save to test_audio folder
-let outputPath = URL(fileURLWithPath: "\(PROJECT_ROOT)/test_audio/swift_output.wav")
+let outputFilename = usePythonTokens ? "python_tokens_swift_audio.wav" : "swift_output.wav"
+let outputPath = URL(fileURLWithPath: "\(PROJECT_ROOT)/test_audio/\(outputFilename)")
 try writeWAV(audio: audioSamples, sampleRate: 24000, to: outputPath)
 print("  ✅ Saved: \(outputPath.path)")
 

@@ -52,6 +52,34 @@ let package = Package(
             name: "TestVocoder",
             targets: ["TestVocoder"]
         ),
+        .executable(
+            name: "VerifyDecoderLayerByLayer",
+            targets: ["VerifyDecoderLayerByLayer"]
+        ),
+        .executable(
+            name: "VerifyBlock1Detail",
+            targets: ["VerifyBlock1Detail"]
+        ),
+        .executable(
+            name: "VerifyDown0Detail",
+            targets: ["VerifyDown0Detail"]
+        ),
+        .executable(
+            name: "VerifyFirstTransformer",
+            targets: ["VerifyFirstTransformer"]
+        ),
+        .executable(
+            name: "TestLayerNorm",
+            targets: ["TestLayerNorm"]
+        ),
+        .executable(
+            name: "VerifyNorm1Manual",
+            targets: ["VerifyNorm1Manual"]
+        ),
+        .executable(
+            name: "DebugMLXStats",
+            targets: ["DebugMLXStats"]
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.21.0"),
@@ -125,6 +153,44 @@ let package = Package(
             name: "TestVocoder",
             dependencies: ["Nightingale"],
             path: "test_scripts/TestVocoder"
+        ),
+        .executableTarget(
+            name: "VerifyDecoderLayerByLayer",
+            dependencies: ["Nightingale"],
+            path: "test_scripts/VerifyDecoderLayerByLayer"
+        ),
+        .executableTarget(
+            name: "VerifyBlock1Detail",
+            dependencies: ["Nightingale"],
+            path: "test_scripts/VerifyBlock1Detail"
+        ),
+        .executableTarget(
+            name: "VerifyDown0Detail",
+            dependencies: ["Nightingale"],
+            path: "test_scripts/VerifyDown0Detail"
+        ),
+        .executableTarget(
+            name: "VerifyFirstTransformer",
+            dependencies: ["Nightingale"],
+            path: "test_scripts/VerifyFirstTransformer"
+        ),
+        .executableTarget(
+            name: "TestLayerNorm",
+            dependencies: [
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
+            ],
+            path: "test_scripts/TestLayerNorm"
+        ),
+        .executableTarget(
+            name: "VerifyNorm1Manual",
+            dependencies: ["Nightingale"],
+            path: "test_scripts/VerifyNorm1Manual"
+        ),
+        .executableTarget(
+            name: "DebugMLXStats",
+            dependencies: ["Nightingale"],
+            path: "test_scripts/DebugMLXStats"
         ),
     ]
 )

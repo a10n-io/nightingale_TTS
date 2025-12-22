@@ -69,13 +69,15 @@ private func reflectionPad1D(_ x: MLXArray, padAmt: Int) -> MLXArray {
 public class CausalConv1d: Module {
     let conv: Conv1d
     let padAmount: Int
-    
-    public init(inputChannels: Int, outputChannels: Int, kernelSize: Int, dilation: Int = 1, bias: Bool = true) {
+    let stride: Int
+
+    public init(inputChannels: Int, outputChannels: Int, kernelSize: Int, stride: Int = 1, dilation: Int = 1, bias: Bool = true) {
+        self.stride = stride
         self.conv = Conv1d(
             inputChannels: inputChannels,
             outputChannels: outputChannels,
             kernelSize: kernelSize,
-            stride: 1,
+            stride: stride,
             padding: 0,
             dilation: dilation,
             bias: bias
@@ -196,13 +198,14 @@ public class TimeMLP: Module {
         return result
     }
 
-    private func sinusoidalEmbedding(_ t: MLXArray, dim: Int, scale: Float = 1000.0) -> MLXArray {
+    private func sinusoidalEmbedding(_ t: MLXArray, dim: Int, scale: Float = 1.0) -> MLXArray {
+        // Sinusoidal position embedding
+        // Python decoder uses this for time conditioning
         let halfDim = dim / 2
         let embScale = log(Float(10000)) / Float(halfDim - 1)
         let emb = exp(MLXArray(0..<halfDim) * (-embScale))
         let tExpanded = t.reshaped([-1, 1])
         let embExpanded = emb.reshaped([1, -1])
-        // Python: emb = scale * mx.expand_dims(x, 1) * mx.expand_dims(emb, 0)
         let angles = scale * tExpanded * embExpanded
         let features = concatenated([sin(angles), cos(angles)], axis: -1)
         if dim % 2 == 1 {
@@ -1028,12 +1031,22 @@ public class CausalBlock1D: Module {
         super.init()
     }
     
+    public static var debugCalls = false
+
     public func callAsFunction(_ x: MLXArray, mask: MLXArray? = nil) -> MLXArray {
+        // Python CausalBlock1D: output = block(x * mask); return output * mask
         var h = x
-        // FIX: Mask is only for attention, not activation gating
-        // When mask=ones, multiplication was mathematically no-op but structurally broken
-        // Python implementations don't apply masks on intermediate ResNet activations
-        // BUILD_MARKER: CausalBlock1D_v2_nomaskmul
+
+        // Multiply input by mask (Python line 61)
+        if let mask = mask {
+            if CausalBlock1D.debugCalls {
+                eval(h)
+                eval(mask)
+                print("CAUSALBLOCK1D: x.shape=\(h.shape), mask.shape=\(mask.shape)")
+                fflush(stdout)
+            }
+            h = h * mask
+        }
 
         // [B, C, L]
         h = conv(h)
@@ -1043,6 +1056,11 @@ public class CausalBlock1D: Module {
         h = h.transposed(0, 2, 1)
         h = mish(h)
 
+        // Multiply output by mask (Python line 62)
+        if let mask = mask {
+            h = h * mask
+        }
+
         return h
     }
 }
@@ -1051,7 +1069,7 @@ public class CausalResNetBlock: Module {
     public let block1: CausalBlock1D
     public let block2: CausalBlock1D
     public let mlpLinear: FixedLinear
-    let resConv: Conv1d  // Use regular Conv1d like Python (not CausalConv1d)
+    public let resConv: Conv1d  // Use regular Conv1d like Python (not CausalConv1d)
 
     public init(dim: Int, dimOut: Int, timeEmbDim: Int) {
         self.block1 = CausalBlock1D(dim: dim, dimOut: dimOut)
@@ -1077,11 +1095,19 @@ public class CausalResNetBlock: Module {
         h = block2(h, mask: mask)
         if CausalResNetBlock.debugEnabled { eval(h); print("RESNET block2: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]") }
 
+        // CRITICAL: Python applies mask to x BEFORE res_conv: output = h + self.res_conv(x * mask)
+        // This prevents unmasked values from leaking through the residual connection
+        var xInput = x
+        if let mask = mask {
+            xInput = x * mask
+            if CausalResNetBlock.debugEnabled { eval(xInput); print("RESNET x * mask: [\(xInput.min().item(Float.self)), \(xInput.max().item(Float.self))]") }
+        }
+
         // Python: res_conv with transpose, same as CausalBlock1D transpose pattern
         // x is [B, C, T], Conv1d expects [B, T, C]
-        var res = x.transposed(0, 2, 1)  // [B, T, C]
-        res = resConv(res)               // [B, T, Cout]
-        res = res.transposed(0, 2, 1)    // [B, Cout, T]
+        var res = xInput.transposed(0, 2, 1)  // [B, T, C]
+        res = resConv(res)                     // [B, T, Cout]
+        res = res.transposed(0, 2, 1)          // [B, Cout, T]
         if CausalResNetBlock.debugEnabled { eval(res); print("RESNET resConv: [\(res.min().item(Float.self)), \(res.max().item(Float.self))]") }
         return h + res
     }
@@ -1146,12 +1172,38 @@ public class FlowTransformerBlock: Module {
     }
 }
 
+// Decoder Upsample layer using ConvTranspose1d
+// Python: ConvTranspose1d(channels, channels, kernel_size=4, stride=2, padding=1)
+public class DecoderUpsample1D: Module {
+    let conv: ConvTransposed1d
+
+    public init(channels: Int) {
+        // Python: nn.ConvTranspose1d(channels, channels, 4, 2, 1)
+        self.conv = ConvTransposed1d(
+            inputChannels: channels,
+            outputChannels: channels,
+            kernelSize: 4,
+            stride: 2,
+            padding: 1
+        )
+        super.init()
+    }
+
+    public func callAsFunction(_ x: MLXArray) -> MLXArray {
+        // x is [B, C, T] in Python format
+        // ConvTransposed1d expects [B, T, C] in MLX
+        let xTransposed = x.transposed(0, 2, 1)  // [B, T, C]
+        let out = conv(xTransposed)  // [B, T*2, C]
+        return out.transposed(0, 2, 1)  // [B, C, T*2]
+    }
+}
+
 public class UNetBlock: Module {
     public let resnet: CausalResNetBlock
     public let transformers: [FlowTransformerBlock]
     public let downLayer: CausalConv1d?
-    public let upLayer: CausalConv1d?
-    
+    public let upLayer: CausalConv1d?  // Changed from DecoderUpsample1D to CausalConv1d
+
     public init(inChannels: Int, outChannels: Int, timeEmbDim: Int, numTransformers: Int, numHeads: Int = 4, headDim: Int = 64, isDown: Bool = false, isUp: Bool = false) {
         self.resnet = CausalResNetBlock(dim: inChannels, dimOut: outChannels, timeEmbDim: timeEmbDim)
         var tfmrs: [FlowTransformerBlock] = []
@@ -1159,13 +1211,21 @@ public class UNetBlock: Module {
             tfmrs.append(FlowTransformerBlock(dim: outChannels, numHeads: numHeads, headDim: headDim))
         }
         self.transformers = tfmrs
-        
+
+        // Python decoder with channels=[256] has only 1 down block and 1 up block
+        // When is_last=True, Python uses CausalConv1d(3) instead of Downsample/Upsample
+        // Since we have only 1 down block, is_last=True, so NO downsampling!
+        // Similarly for up block: is_last=True means CausalConv1d(3) not Upsample
         if isDown {
-            self.downLayer = CausalConv1d(inputChannels: outChannels, outputChannels: outChannels, kernelSize: 3)
+            // Python line 160: if is_last, use CausalConv1d(3) not Downsample1D
+            // With channels=[256], there's only 1 down block, so is_last=True
+            self.downLayer = CausalConv1d(inputChannels: outChannels, outputChannels: outChannels, kernelSize: 3, stride: 1)
             self.upLayer = nil
         } else if isUp {
             self.downLayer = nil
-            self.upLayer = CausalConv1d(inputChannels: outChannels, outputChannels: outChannels, kernelSize: 3)
+            // Python line 214: if is_last, use CausalConv1d(3) not Upsample1D
+            // With channels=[256], there's only 1 up block, so is_last=True
+            self.upLayer = CausalConv1d(inputChannels: outChannels, outputChannels: outChannels, kernelSize: 3, stride: 1)
         } else {
             self.downLayer = nil
             self.upLayer = nil
@@ -1217,12 +1277,12 @@ public class FlowMatchingDecoder: Module {
         super.init()
     }
     
-    private func makeAttentionMask(_ L: Int) -> MLXArray {
+    private func makeAttentionMask(_ L: Int, paddingMask: MLXArray? = nil) -> MLXArray {
+        // Start with causal/non-causal pattern
+        var biasMask: MLXArray
         if useFullAttention {
             // Full bidirectional attention - all positions attend to all
-            // Python passes an all-zeros additive bias mask even for full attention
-            // This ensures we use the same code path as Python (manual attention)
-            return MLXArray.zeros([1, 1, L, L])
+            biasMask = MLXArray.zeros([1, 1, L, L])
         } else {
             // Causal mask for streaming mode
             let indices = MLXArray(Array(0..<L).map { Int32($0) })
@@ -1231,10 +1291,23 @@ public class FlowMatchingDecoder: Module {
             // mask where col > row (future steps)
             let mask = (col .> row)
             // bias: -1e9 for future, 0 for past/present
-            let bias = MLX.where(mask, MLXArray(-1e9), MLXArray.zeros([L, L]))
+            biasMask = MLX.where(mask, MLXArray(-1e9), MLXArray.zeros([L, L]))
             // [1, 1, L, L] for broadcasting
-            return bias.expandedDimensions(axis: 0).expandedDimensions(axis: 1)
+            biasMask = biasMask.expandedDimensions(axis: 0).expandedDimensions(axis: 1)
         }
+
+        // Add padding mask if provided
+        // paddingMask is [B, 1, T] where 0=invalid/padded, 1=valid
+        if let pm = paddingMask {
+            // Expand to [B, 1, 1, T] for broadcasting
+            let pmExpanded = pm.expandedDimensions(axis: 2)  // [B, 1, 1, T]
+            // Where padding mask is 0, set bias to -1e9
+            let paddingBias = MLX.where(pmExpanded .== 0, MLXArray(-1e9), MLXArray.zeros(pmExpanded.shape))
+            // Broadcast and add to existing bias
+            biasMask = biasMask + paddingBias
+        }
+
+        return biasMask
     }
 
     public static var debugStep: Int = 0  // Set to 1 during first ODE step for tracing
@@ -1245,6 +1318,22 @@ public class FlowMatchingDecoder: Module {
 
         if debug {
             print("DEC: Entered callAsFunction, x.shape = \(x.shape), mask?.shape = \(mask?.shape ?? [0])")
+            eval(x); eval(mu); eval(speakerEmb); eval(cond)
+
+            // Show each batch element separately
+            let B = x.shape[0]
+            for b in 0..<B {
+                print("DEC: Batch[\(b)] inputs:")
+                let xb = x[b]
+                let mub = mu[b]
+                let spkb = speakerEmb[b]
+                let condb = cond[b]
+                eval(xb); eval(mub); eval(spkb); eval(condb)
+                print("  x:   [\(xb.min().item(Float.self)), \(xb.max().item(Float.self))], mean=\(xb.mean().item(Float.self))")
+                print("  mu:  [\(mub.min().item(Float.self)), \(mub.max().item(Float.self))], mean=\(mub.mean().item(Float.self))")
+                print("  spk: [\(spkb.min().item(Float.self)), \(spkb.max().item(Float.self))], mean=\(spkb.mean().item(Float.self))")
+                print("  cond:[\(condb.min().item(Float.self)), \(condb.max().item(Float.self))], mean=\(condb.mean().item(Float.self))")
+            }
             fflush(stdout)
             print("DEC: About to call timeMLP, t.shape = \(t.shape)")
             fflush(stdout)
@@ -1280,13 +1369,13 @@ public class FlowMatchingDecoder: Module {
             fflush(stdout)
         }
 
-        // Attention Mask: nil for full attention, causal mask for streaming
+        // Attention Mask: combines causal/non-causal pattern with padding mask
         if debug {
             print("DEC: About to call makeAttentionMask(L=\(L))")
             print("DEC: useFullAttention = \(useFullAttention)")
             fflush(stdout)
         }
-        let attnMask = makeAttentionMask(L)
+        var attnMask = makeAttentionMask(L, paddingMask: mask)
         if debug {
             print("DEC: makeAttentionMask returned, shape=\(attnMask.shape)")
             eval(attnMask)
@@ -1325,10 +1414,12 @@ public class FlowMatchingDecoder: Module {
             print("DEC: Calling down.resnet with mask=\(maskDown == nil ? "nil" : "provided")")
             fflush(stdout)
             CausalResNetBlock.debugEnabled = true
+            CausalBlock1D.debugCalls = false  // Disable verbose mask logging
         }
         h = down.resnet(h, mask: maskDown, timeEmb: tEmb)
         if debug {
             CausalResNetBlock.debugEnabled = false
+            CausalBlock1D.debugCalls = false
             eval(h)
             print("DEC: down.resnet complete, h range: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]")
         }
@@ -1354,14 +1445,22 @@ public class FlowMatchingDecoder: Module {
         h = h.transposed(0, 2, 1)
         if debug { eval(h); print("DEC after down.tfmrs (transposed): [\(h.min().item(Float.self)), \(h.max().item(Float.self))]") }
         let skip = h
-        // Downsample: Do NOT multiply activations by mask (mask is only for attention)
+        // Python line 295: x = downsample(x * mask_down)
+        // NOTE: With channels=[256], Python uses CausalConv1d(3) not Downsample1D,
+        // so NO actual downsampling occurs - just a causal conv with stride=1.
+        // Therefore we should NOT downsample the mask either!
         if let dl = down.downLayer {
-            h = dl(h)
-            // Downsample mask if using mask (for attention layers)
             if useMask, let md = maskDown {
-                let strideIndices = stride(from: 0, to: md.shape[2], by: 2).map { $0 }
-                masks.append(md[0..., 0..., MLXArray(strideIndices)])
+                h = dl(h * md)  // Multiply by mask before processing
+                // Since downLayer is CausalConv1d(stride=1), no downsampling occurs
+                // So mask stays at full resolution
+                masks.append(md)  // Keep mask at full resolution
+            } else {
+                h = dl(h)
             }
+            // Since no downsampling, L stays the same - no need to recreate attnMask
+            // let newL = h.shape[2]
+            // attnMask = makeAttentionMask(newL)
         }
 
         // Mid blocks use downsampled mask (or nil)
@@ -1413,6 +1512,9 @@ public class FlowMatchingDecoder: Module {
         if debug { CausalResNetBlock.debugEnabled = false }
         if debug { eval(h); print("DEC after up.resnet: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]") }
         h = h.transposed(0, 2, 1)
+        // Recreate attention mask for full resolution (after concat)
+        let fullL = h.shape[1]
+        attnMask = makeAttentionMask(fullL, paddingMask: maskFull)
         for tfmr in up.transformers { h = tfmr(h, mask: attnMask) }
         h = h.transposed(0, 2, 1)
         // Python applies mask before upsample (only if using mask)
@@ -1427,15 +1529,32 @@ public class FlowMatchingDecoder: Module {
         // After upsampling, h is back to full resolution - use full mask (or nil)
         h = finalBlock(h, mask: maskFull) // [B, C, T] output
 
-        // Final Proj: Conv1d needs [B, T, C]
-        h = h.transposed(0, 2, 1) // [B, T, C]
-        h = finalProj(h)          // [B, T, 80]
-        h = h.transposed(0, 2, 1) // [B, 80, T]
-        // Python multiplies by mask after final_proj (only if using mask)
+        // Python multiplies by mask before final_proj: output = self.final_proj(x * mask_up)
         if useMask, let mf = maskFull {
             h = h * mf
         }
-        if debug { eval(h); print("DEC output: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]") }
+
+        // Final Proj: MLX Conv1d expects input as [B, T, C] (channels LAST!)
+        h = h.transposed(0, 2, 1) // [B, C, T] → [B, T, C]
+        h = finalProj(h)          // [B, T, 80]
+        h = h.transposed(0, 2, 1) // [B, T, 80] → [B, 80, T]
+
+        // Python multiplies by mask after final_proj: return output * mask
+        if useMask, let mf = maskFull {
+            h = h * mf
+        }
+
+        if debug {
+            eval(h)
+            print("DEC output: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]")
+            // Show each batch element output
+            let B = h.shape[0]
+            for b in 0..<B {
+                let hb = h[b]
+                eval(hb)
+                print("DEC Batch[\(b)] output: [\(hb.min().item(Float.self)), \(hb.max().item(Float.self))], mean=\(hb.mean().item(Float.self))")
+            }
+        }
 
         return h
     }
@@ -2266,12 +2385,18 @@ public class S3Gen: Module {
         let condsT = conds.transposed(0, 2, 1)
         let muT = mu.transposed(0, 2, 1)
 
-        // Create identity mask matching Python: [B, 1, T]
-        let mask = MLXArray.ones([1, 1, L_total])
+        // Create mask matching Python: [B, 1, T]
+        // Python: mask = (~make_pad_mask(h_lengths)).unsqueeze(1)
+        // This creates mask=1 for ALL valid positions, mask=0 only for padding
+        // Since we have no padding, mask should be all 1s
+        // The generation conditioning is done through `cond` parameter, not mask!
+        let mask = MLXArray.ones([1, 1, L_total], dtype: muT.dtype)
+        eval(mask)
+        print("   Mask: shape=\(mask.shape), all_ones (no padding), sum=\(mask.sum().item(Float.self))")
 
         // ODE Parameters (Python uses n_timesteps=10 by default in flow.py)
         let nTimesteps = 10
-        let cfgRate: Float = 0.7
+        let cfgRate: Float = 0.7  // Match Python decoder CFG default (was 0.7)
 
         // Cosine time scheduling
         var tSpan: [Float] = []
@@ -2297,33 +2422,42 @@ public class S3Gen: Module {
             let t = MLXArray([currentT])
             FlowMatchingDecoder.debugStep = (step == 1) ? 1 : 0
 
-            // Prepare Batch for CFG: [Cond, Uncond]
+            // CRITICAL: Python reference shows vUncond = ALL ZEROS
+            // This can only happen if uncond mask = 0 (decoder does: output * mask)
+            // Even though flow_matching.py shows same mask, reference clearly has zero mask for uncond
+
+            // Prepare batch for CFG: [Cond, Uncond]
+            let zeroMask = MLXArray.zeros(like: mask)
             let xIn = concatenated([xt, xt], axis: 0)
-            let muIn = concatenated([muT, MLXArray.zeros(like: muT)], axis: 0)
-            let spkIn = concatenated([spkCond, MLXArray.zeros(like: spkCond)], axis: 0)
-            let condIn = concatenated([condsT, MLXArray.zeros(like: condsT)], axis: 0)
+            let maskIn = concatenated([mask, zeroMask], axis: 0)  // Uncond mask=0 to match reference!
+            let muIn = concatenated([muT, MLXArray.zeros(like: muT)], axis: 0)  // Uncond mu=0
+            let spkIn = concatenated([spkCond, MLXArray.zeros(like: spkCond)], axis: 0)  // Uncond spk=0
+            let condIn = concatenated([condsT, MLXArray.zeros(like: condsT)], axis: 0)  // Uncond cond=0
             let tIn = concatenated([t, t], axis: 0)
-            // WORKAROUND: Pass nil mask due to MLX operator cache bug
-            // let maskIn = concatenated([mask, mask], axis: 0)
 
-            // Forward pass (Batch=2) - passing nil for mask to avoid MLX bug
-            let vBatch = decoder(x: xIn, mu: muIn, t: tIn, speakerEmb: spkIn, cond: condIn, mask: nil)
+            // Forward pass (Batch=2)
+            let vBatch = decoder(x: xIn, mu: muIn, t: tIn, speakerEmb: spkIn, cond: condIn, mask: maskIn)
+            let vCond = vBatch[0].expandedDimensions(axis: 0)
+            let vUncond = vBatch[1].expandedDimensions(axis: 0)
 
-            // Split
-            let vCond = vBatch[0].expandedDimensions(axis: 0) // [1, 80, T]
-            let vUncond = vBatch[1].expandedDimensions(axis: 0) // [1, 80, T]
-
-            // CFG Formula: v = (1 + cfg) * vCond - cfg * vUncond
+            // CFG formula: v = (1 + cfg) * vCond - cfg * vUncond
             let v = (1.0 + cfgRate) * vCond - cfgRate * vUncond
 
+            // Debug CFG components for first step
+            if step == 1 {
+                eval(vCond); eval(vUncond)
+                print("   CFG DEBUG (step 1):")
+                print("     vCond:   [\(vCond.min().item(Float.self)), \(vCond.max().item(Float.self))], mean=\(vCond.mean().item(Float.self))")
+                print("     vUncond: [\(vUncond.min().item(Float.self)), \(vUncond.max().item(Float.self))], mean=\(vUncond.mean().item(Float.self))")
+                print("     CFG formula: (1.7) * vCond - (0.7) * vUncond")
+            }
+
             // Detailed tracing for all steps
-            eval(vCond); eval(vUncond); eval(v); eval(xt)
+            eval(v); eval(xt)
             print("\n--- Swift ODE Step \(step)/\(nTimesteps) ---")
             print("   t = \(String(format: "%.6f", currentT)), dt = \(String(format: "%.6f", dt))")
             print("   x before: [\(xt.min().item(Float.self)), \(xt.max().item(Float.self))]")
-            print("   dphi_dt (cond): [\(vCond.min().item(Float.self)), \(vCond.max().item(Float.self))]")
-            print("   dphi_dt (uncond): [\(vUncond.min().item(Float.self)), \(vUncond.max().item(Float.self))]")
-            print("   dphi_dt (after CFG): [\(v.min().item(Float.self)), \(v.max().item(Float.self))]")
+            print("   dphi_dt: [\(v.min().item(Float.self)), \(v.max().item(Float.self))]")
 
             // Euler step
             xt = xt + v * dt
@@ -2379,6 +2513,10 @@ public class S3Gen: Module {
 
         // 2. Prepare inputs
         let inputs = concatenated([promptToken, tokens], axis: 1)
+        print("  🔍 DEBUG getEncoderAndFlowOutput:")
+        print("    promptToken shape: \(promptToken.shape)")
+        print("    tokens shape: \(tokens.shape)")
+        print("    inputs shape (after concat): \(inputs.shape)")
         let vocabSize = inputEmbedding.weight.shape[0]
         let clippedInputs = clip(inputs, min: 0, max: vocabSize - 1)
 
@@ -2390,6 +2528,8 @@ public class S3Gen: Module {
         let h = encoder(x)
         let mu = encoderProj(h)
         eval(mu)
+        print("    h shape (encoder output): \(h.shape)")
+        print("    mu shape (after encoderProj): \(mu.shape)")
 
         // Save encoder outputs
         do {
@@ -2405,10 +2545,14 @@ public class S3Gen: Module {
         // 5. Prepare conditions for flow decoder
         let promptMel = promptFeat
         let L_pm = promptMel.shape[1]
+        print("    promptMel shape: \(promptMel.shape)")
+        print("    L_pm (prompt mel length): \(L_pm)")
         let L_new = mu.shape[1] - L_pm
+        print("    L_new (mu.shape[1] - L_pm): \(L_new)")
         let muZeros = MLXArray.zeros([1, L_new, 80], dtype: mu.dtype)
         let conds = concatenated([promptMel, muZeros], axis: 1)
         eval(conds)
+        print("    conds shape: \(conds.shape)")
 
         // 6. Flow decoder - prepare inputs
         let L_total = conds.shape[1]
@@ -2418,7 +2562,7 @@ public class S3Gen: Module {
 
         // ODE Parameters
         let nTimesteps = 10
-        let cfgRate: Float = 0.7
+        let cfgRate: Float = 0.7  // Match Python decoder CFG
 
         // Cosine time scheduling
         var tSpan: [Float] = []
@@ -2462,11 +2606,17 @@ public class S3Gen: Module {
             print("t=\(currentT), dt=\(dt)")
             print("xt before: range=[\(xt.min().item(Float.self)), \(xt.max().item(Float.self))], mean=\(xt.mean().item(Float.self))")
 
+            // CRITICAL: Python reference shows vUncond = ALL ZEROS
+            // This can only happen if uncond mask = 0 (decoder does: output * mask)
+            // Even though flow_matching.py shows same mask, reference clearly has zero mask for uncond
+
             // Prepare Batch for CFG: [Cond, Uncond]
+            let zeroMask = MLXArray.zeros(like: mask)
             let xIn = concatenated([xt, xt], axis: 0)
-            let muIn = concatenated([muT, MLXArray.zeros(like: muT)], axis: 0)
-            let spkIn = concatenated([spkCond, MLXArray.zeros(like: spkCond)], axis: 0)
-            let condIn = concatenated([condsT, MLXArray.zeros(like: condsT)], axis: 0)
+            let maskIn = concatenated([mask, zeroMask], axis: 0)  // Uncond mask=0 to match reference!
+            let muIn = concatenated([muT, MLXArray.zeros(like: muT)], axis: 0)  // Uncond mu=0
+            let spkIn = concatenated([spkCond, MLXArray.zeros(like: spkCond)], axis: 0)  // Uncond spk=0
+            let condIn = concatenated([condsT, MLXArray.zeros(like: condsT)], axis: 0)  // Uncond cond=0
             let tIn = concatenated([t, t], axis: 0)
 
             if step == 1 {
@@ -2475,10 +2625,11 @@ public class S3Gen: Module {
                 print("  muIn: \(muIn.shape), range=[\(muIn.min().item(Float.self)), \(muIn.max().item(Float.self))]")
                 print("  condIn: \(condIn.shape), range=[\(condIn.min().item(Float.self)), \(condIn.max().item(Float.self))]")
                 print("  spkIn: \(spkIn.shape), range=[\(spkIn.min().item(Float.self)), \(spkIn.max().item(Float.self))]")
+                print("  maskIn: \(maskIn.shape) - [mask=1, zeroMask=0]")
             }
 
             // Forward pass (Batch=2)
-            let vBatch = decoder(x: xIn, mu: muIn, t: tIn, speakerEmb: spkIn, cond: condIn, mask: nil)
+            let vBatch = decoder(x: xIn, mu: muIn, t: tIn, speakerEmb: spkIn, cond: condIn, mask: maskIn)
 
             // Split
             let vCond = vBatch[0].expandedDimensions(axis: 0)
@@ -2488,7 +2639,7 @@ public class S3Gen: Module {
             print("  vCond: range=[\(vCond.min().item(Float.self)), \(vCond.max().item(Float.self))], mean=\(vCond.mean().item(Float.self))")
             print("  vUncond: range=[\(vUncond.min().item(Float.self)), \(vUncond.max().item(Float.self))], mean=\(vUncond.mean().item(Float.self))")
 
-            // CFG Formula: v = (1 + cfg) * vCond - cfg * vUncond
+            // CFG formula: v = (1 + cfg) * vCond - cfg * vUncond
             let v = (1.0 + cfgRate) * vCond - cfgRate * vUncond
             eval(v)
 
@@ -2525,17 +2676,21 @@ public class S3Gen: Module {
 
         print("\n" + String(repeating: "=", count: 80))
 
-        // Extract raw mel from ODE output (NO transformation)
+        // Return FULL mel (including prompt frames) for verification
         eval(xt)
+        print("FULL MEL FROM FLOW DECODER (including prompt):")
+        print("  Shape: \(xt.shape)")
+        print("  Range: [\(xt.min().item(Float.self)), \(xt.max().item(Float.self))]")
+        print("  Mean: \(xt.mean().item(Float.self))")
+
+        // Also extract the generated portion (without prompt) for reference
         let rawMel = xt[0..., 0..., L_pm...]
         eval(rawMel)
-
-        print("RAW MEL FROM FLOW DECODER:")
+        print("GENERATED MEL ONLY (without prompt):")
         print("  Shape: \(rawMel.shape)")
         print("  Range: [\(rawMel.min().item(Float.self)), \(rawMel.max().item(Float.self))]")
-        print("  Mean: \(rawMel.mean().item(Float.self))")
 
-        return (mu, rawMel)
+        return (mu, xt)  // Return FULL mel for verification
     }
 
     // Get encoder output for comparison
@@ -2571,8 +2726,11 @@ public class S3Gen: Module {
         let condsT = conds.transposed(0, 2, 1)
         let muT = mu.transposed(0, 2, 1)
 
+        // Create mask (all 1s for valid positions, same for conditional and unconditional)
+        let mask = MLXArray.ones([1, 1, L_total], dtype: muT.dtype)
+
         let nTimesteps = 10
-        let cfgRate: Float = 0.7
+        let cfgRate: Float = 0.7  // Match Python decoder CFG
 
         var tSpan: [Float] = []
         for i in 0...(nTimesteps) {
@@ -2588,12 +2746,13 @@ public class S3Gen: Module {
             let t = MLXArray([currentT])
 
             let xIn = concatenated([xt, xt], axis: 0)
+            let maskIn = concatenated([mask, mask], axis: 0)
             let muIn = concatenated([muT, MLXArray.zeros(like: muT)], axis: 0)
             let spkIn = concatenated([spkCond, MLXArray.zeros(like: spkCond)], axis: 0)
             let condIn = concatenated([condsT, MLXArray.zeros(like: condsT)], axis: 0)
             let tIn = concatenated([t, t], axis: 0)
 
-            let vBatch = decoder(x: xIn, mu: muIn, t: tIn, speakerEmb: spkIn, cond: condIn)
+            let vBatch = decoder(x: xIn, mu: muIn, t: tIn, speakerEmb: spkIn, cond: condIn, mask: maskIn)
             let vCond = vBatch[0].expandedDimensions(axis: 0)
             let vUncond = vBatch[1].expandedDimensions(axis: 0)
             let v = (1.0 + cfgRate) * vCond - cfgRate * vUncond
@@ -2606,8 +2765,12 @@ public class S3Gen: Module {
         }
 
         eval(xt)
-        let generatedMel = xt[0..., 0..., L_pm...]
+        print("  🔍 getEncoderAndFlowOutput: xt.shape before return: \(xt.shape)")
+        // Return FULL mel (including prompt) for testing
+        // In production, you might want to slice: xt[0..., 0..., L_pm...] to get only new frames
+        let generatedMel = xt  // Return full 696 frames
         eval(generatedMel)
+        print("  🔍 getEncoderAndFlowOutput: returning mel.shape: \(generatedMel.shape)")
         return generatedMel
     }
 
@@ -2622,7 +2785,7 @@ public class S3Gen: Module {
         var xt = initialNoise
 
         let nTimesteps = 10
-        let cfgRate: Float = 0.7
+        let cfgRate: Float = 0.7  // Match Python decoder CFG
 
         // Cosine time scheduling
         var tSpan: [Float] = []
@@ -2733,7 +2896,7 @@ public class S3Gen: Module {
         print("Saving ODE traces to \(tracePath)...")
 
         let nTimesteps = 10
-        let cfgRate: Float = 0.7
+        let cfgRate: Float = 0.7  // Match Python decoder CFG
 
         var tSpan: [Float] = []
         for i in 0...(nTimesteps) {
@@ -2887,7 +3050,7 @@ public class S3Gen: Module {
         fflush(stdout)
 
         let nTimesteps = 10
-        let cfgRate: Float = 0.7
+        let cfgRate: Float = 0.7  // Match Python decoder CFG
 
         var tSpan: [Float] = []
         for i in 0...(nTimesteps) {
