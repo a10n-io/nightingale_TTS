@@ -200,9 +200,90 @@ print("  DEBUG: s3PromptFeat shape: \(s3PromptFeat.shape)")
 
 // Load S3Gen (reuse loading logic from VerifyLive)
 // Load FULL S3Gen weights (encoder + decoder + embeddings)
-// NOTE: Using *_fixed.safetensors with all Conv1d in consistent MLX format [out, kernel, in]
-let flowURL = modelDir.appendingPathComponent("mlx/s3gen_fp16_fixed.safetensors")
+let flowURL = modelDir.appendingPathComponent("mlx/s3gen_fp16.safetensors")
 let vocoderURL = modelDir.appendingPathComponent("mlx/vocoder_weights_fixed_v2.safetensors")
+// CRITICAL: Use decoder_weights.safetensors with PROVEN remapDecoderKey from VerifyDecoderLayerByLayer
+let decoderWeightsURL = modelDir.appendingPathComponent("chatterbox/decoder_weights.safetensors")
+
+// PROVEN remapDecoderKey from VerifyDecoderLayerByLayer (achieved RMSE 1.12e-06)
+func remapDecoderKey(_ key: String) -> String {
+    var k = key
+
+    // Remove prefix
+    k = k.replacingOccurrences(of: "s3gen.flow.decoder.", with: "")
+    k = k.replacingOccurrences(of: "estimator.", with: "")
+
+    // Block names with underscore conversion
+    k = k.replacingOccurrences(of: "down_blocks.", with: "downBlocks.")
+    k = k.replacingOccurrences(of: "mid_blocks.", with: "midBlocks.")
+    k = k.replacingOccurrences(of: "up_blocks.", with: "upBlocks.")
+
+    // CRITICAL: Python UNet structure vs Swift UNet structure
+    k = k.replacingOccurrences(of: "downBlocks.0.0.", with: "downBlocks.0.resnet.")
+    k = k.replacingOccurrences(of: "midBlocks.0.0.", with: "midBlocks.0.resnet.")
+    k = k.replacingOccurrences(of: "midBlocks.1.0.", with: "midBlocks.1.resnet.")
+    k = k.replacingOccurrences(of: "midBlocks.2.0.", with: "midBlocks.2.resnet.")
+    k = k.replacingOccurrences(of: "midBlocks.3.0.", with: "midBlocks.3.resnet.")
+    k = k.replacingOccurrences(of: "midBlocks.4.0.", with: "midBlocks.4.resnet.")
+    k = k.replacingOccurrences(of: "midBlocks.5.0.", with: "midBlocks.5.resnet.")
+    k = k.replacingOccurrences(of: "midBlocks.6.0.", with: "midBlocks.6.resnet.")
+    k = k.replacingOccurrences(of: "midBlocks.7.0.", with: "midBlocks.7.resnet.")
+    k = k.replacingOccurrences(of: "midBlocks.8.0.", with: "midBlocks.8.resnet.")
+    k = k.replacingOccurrences(of: "midBlocks.9.0.", with: "midBlocks.9.resnet.")
+    k = k.replacingOccurrences(of: "midBlocks.10.0.", with: "midBlocks.10.resnet.")
+    k = k.replacingOccurrences(of: "midBlocks.11.0.", with: "midBlocks.11.resnet.")
+    k = k.replacingOccurrences(of: "upBlocks.0.0.", with: "upBlocks.0.resnet.")
+
+    // Map transformer indices
+    k = k.replacingOccurrences(of: "downBlocks.0.1.0.", with: "downBlocks.0.transformers.0.")
+    k = k.replacingOccurrences(of: "downBlocks.0.1.1.", with: "downBlocks.0.transformers.1.")
+    k = k.replacingOccurrences(of: "downBlocks.0.1.2.", with: "downBlocks.0.transformers.2.")
+    k = k.replacingOccurrences(of: "downBlocks.0.1.3.", with: "downBlocks.0.transformers.3.")
+    for i in 0...11 {
+        k = k.replacingOccurrences(of: "midBlocks.\(i).1.0.", with: "midBlocks.\(i).transformers.0.")
+        k = k.replacingOccurrences(of: "midBlocks.\(i).1.1.", with: "midBlocks.\(i).transformers.1.")
+        k = k.replacingOccurrences(of: "midBlocks.\(i).1.2.", with: "midBlocks.\(i).transformers.2.")
+        k = k.replacingOccurrences(of: "midBlocks.\(i).1.3.", with: "midBlocks.\(i).transformers.3.")
+    }
+    k = k.replacingOccurrences(of: "upBlocks.0.1.0.", with: "upBlocks.0.transformers.0.")
+    k = k.replacingOccurrences(of: "upBlocks.0.1.1.", with: "upBlocks.0.transformers.1.")
+    k = k.replacingOccurrences(of: "upBlocks.0.1.2.", with: "upBlocks.0.transformers.2.")
+    k = k.replacingOccurrences(of: "upBlocks.0.1.3.", with: "upBlocks.0.transformers.3.")
+
+    // Downsample/Upsample
+    k = k.replacingOccurrences(of: "downBlocks.0.2.", with: "downBlocks.0.downLayer.conv.")
+    k = k.replacingOccurrences(of: "upBlocks.0.2.", with: "upBlocks.0.upLayer.conv.")
+
+    // CausalBlock1D structure mapping
+    k = k.replacingOccurrences(of: ".block.0.", with: ".conv.conv.")
+    k = k.replacingOccurrences(of: ".block.2.", with: ".norm.")
+
+    // ResNet components
+    k = k.replacingOccurrences(of: ".mlp.1.", with: ".mlpLinear.")
+    k = k.replacingOccurrences(of: "mlp_linear", with: "mlpLinear")
+    k = k.replacingOccurrences(of: "res_conv", with: "resConv")
+
+    // Transformer components
+    k = k.replacingOccurrences(of: ".attn1.", with: ".attention.")
+    k = k.replacingOccurrences(of: "to_q.", with: "queryProj.")
+    k = k.replacingOccurrences(of: "to_k.", with: "keyProj.")
+    k = k.replacingOccurrences(of: "to_v.", with: "valueProj.")
+    k = k.replacingOccurrences(of: "to_out.0.", with: "outProj.")
+    k = k.replacingOccurrences(of: ".norm3.", with: ".norm2.")
+    k = k.replacingOccurrences(of: ".ff.net.0.proj.", with: ".ff.layers.0.")
+    k = k.replacingOccurrences(of: ".ff.net.2.", with: ".ff.layers.1.")
+
+    // TimeMLP
+    k = k.replacingOccurrences(of: "time_mlp", with: "timeMLP")
+    k = k.replacingOccurrences(of: "linear_1", with: "linear1")
+    k = k.replacingOccurrences(of: "linear_2", with: "linear2")
+
+    // Final components
+    k = k.replacingOccurrences(of: "final_block", with: "finalBlock")
+    k = k.replacingOccurrences(of: "final_proj", with: "finalProj")
+
+    return k
+}
 
 func remapS3Key(_ key: String) -> String? {
     var k = key
@@ -325,124 +406,39 @@ var s3gen = S3Gen(flowWeights: flowWeights, vocoderWeights: nil)
 print("Loading vocoder weights via update()...")
 s3gen.update(parameters: ModuleParameters.unflattened(remapS3Keys(vocoderWeights, transposeConv1d: false)))
 
-// Load ONLY decoder weights via update (not encoder, which was loaded in init)
-// NOTE: s3gen_fp16.safetensors already has weights in MLX format (Conv1d are [out,kernel,in])
-print("Loading decoder weights via update()...")
-let decoderOnlyWeights = flowWeights.filter { $0.key.contains("decoder") }
-print("  DEBUG: Filtered to \(decoderOnlyWeights.count) decoder-only keys")
-print("  Sample decoder keys:")
-for key in Array(decoderOnlyWeights.keys.sorted().prefix(5)) {
-    print("    \(key)")
-}
-// Check for final_proj specifically
-print("  DEBUG: Checking final_proj keys...")
-for key in decoderOnlyWeights.keys where key.contains("final_proj") {
-    print("    Before remap: '\(key)'")
-    if let remapped = remapS3Key(key) {
-        print("    After remap:  '\(remapped)'")
+// CRITICAL: Load decoder weights from decoder_weights.safetensors using PROVEN remapDecoderKey
+// This approach achieved RMSE 1.12e-06 in VerifyDecoderLayerByLayer
+print("Loading decoder weights from decoder_weights.safetensors (PROVEN approach)...")
+let rawDecoderWeights = try MLX.loadArrays(url: decoderWeightsURL)
+print("  Loaded \(rawDecoderWeights.count) raw decoder weight tensors")
+
+// Apply PROVEN remapping and transposition from VerifyDecoderLayerByLayer
+var decoderWeightsRemapped: [String: MLXArray] = [:]
+for (key, value) in rawDecoderWeights {
+    if key.hasPrefix("s3gen.flow.decoder.") {
+        let newKey = remapDecoderKey(key)
+
+        // CRITICAL: PyTorch Linear weights are [Out, In], but MLX Linear expects [In, Out]
+        let isLinearWeight = newKey.hasSuffix(".weight") && value.ndim == 2 &&
+                            !newKey.contains("conv") && !newKey.contains("norm") && !newKey.contains("embedding")
+
+        // CRITICAL: PyTorch Conv1d weights are [Out, In, K], but MLX Conv1d expects [Out, K, In]
+        let isConv1dWeight = newKey.hasSuffix(".weight") && value.ndim == 3 &&
+                            !newKey.contains("norm") && !newKey.contains("embedding")
+
+        if isLinearWeight {
+            decoderWeightsRemapped[newKey] = value.T
+        } else if isConv1dWeight {
+            decoderWeightsRemapped[newKey] = value.transposed(0, 2, 1)
+        } else {
+            decoderWeightsRemapped[newKey] = value
+        }
     }
 }
-// CRITICAL: s3gen_fp16.safetensors ALREADY has Conv1d in MLX format [out,kernel,in]
-// Do NOT transpose! The file was pre-converted for MLX.
-// Decoder weights need auto-detection transpose (mix of PyTorch and pre-converted formats)
-let remappedDecoderWeights = remapS3Keys(decoderOnlyWeights, transposeConv1d: true)
-print("  After remapping: \(remappedDecoderWeights.count) decoder keys")
-print("  Sample remapped keys:")
-for key in Array(remappedDecoderWeights.keys.sorted().prefix(5)) {
-    print("    \(key)")
-}
-// Check if finalProj keys are in remapped weights
-print("  DEBUG: Checking for finalProj in remapped weights...")
-for key in remappedDecoderWeights.keys where key.contains("finalProj") {
-    print("    Found: '\(key)'")
-}
-// DEBUG: Check a decoder weight BEFORE update
-if let firstWeight = s3gen.decoder.downBlocks[0].resnet.block1.norm.weight {
-    eval(firstWeight)
-    let beforeMean = firstWeight.mean().item(Float.self)
-    let beforeMin = firstWeight.min().item(Float.self)
-    let beforeMax = firstWeight.max().item(Float.self)
-    print("  DEBUG: Decoder downBlocks[0].resnet.block1.norm.weight BEFORE update:")
-    print("    mean=\(beforeMean), range=[\(beforeMin), \(beforeMax)]")
-}
+print("  Remapped \(decoderWeightsRemapped.count) decoder weights")
 
-// DEBUG: Check if Conv1d weight was transposed
-if let convWeight = remappedDecoderWeights["decoder.estimator.downBlocks.0.resnet.block1.conv.conv.weight"] {
-    eval(convWeight)
-    print("  DEBUG: Conv1d weight shape AFTER remapping: \(convWeight.shape)")
-    print("    Expected [256, 3, 320] if transposed correctly")
-    print("    Original PyTorch format: [256, 320, 3]")
-}
-
-// Strip "decoder.estimator." prefix and call update() directly on decoder module
-// Python has decoder.estimator.downBlocks but Swift has decoder.downBlocks
-print("  Stripping 'decoder.estimator.' prefix and loading directly to decoder...")
-var decoderWeightsNoPrefix: [String: MLXArray] = [:]
-for (key, value) in remappedDecoderWeights {
-    if key.hasPrefix("decoder.estimator.") {
-        let keyWithoutPrefix = String(key.dropFirst("decoder.estimator.".count))
-        decoderWeightsNoPrefix[keyWithoutPrefix] = value
-    } else if key.hasPrefix("decoder.") {
-        // Some keys might not have "estimator" (e.g., decoder.convIn, decoder.timeMLP)
-        let keyWithoutPrefix = String(key.dropFirst("decoder.".count))
-        decoderWeightsNoPrefix[keyWithoutPrefix] = value
-    }
-}
-
-// DEBUG: Check the same Conv1d weight after prefix stripping
-if let convWeight = decoderWeightsNoPrefix["downBlocks.0.resnet.block1.conv.conv.weight"] {
-    eval(convWeight)
-    print("  DEBUG: Conv1d weight shape AFTER prefix strip: \(convWeight.shape)")
-}
-print("  Stripped to \(decoderWeightsNoPrefix.count) keys without 'decoder.' prefix")
-print("  Sample stripped keys:")
-for key in Array(decoderWeightsNoPrefix.keys.sorted().prefix(5)) {
-    print("    \(key)")
-}
-
-// DEBUG: Check Conv1d weight shapes in the dict before loading
-for (key, value) in decoderWeightsNoPrefix {
-    if key.contains("downBlocks.0") && key.contains(".conv.") && key.hasSuffix(".weight") && value.ndim == 3 {
-        eval(value)
-        print("  DEBUG Conv1d in dict: \(key) → shape \(value.shape)")
-    }
-}
-
-// CRITICAL: Transpose ALL FixedLinear weights from PyTorch [out, in] to MLX [in, out]
-// This includes:
-// - timeMLP.linear_1, timeMLP.linear_2
-// - ResNet mlp.1.weight (mlpLinear)
-// - Attention projections (queryProj, keyProj, valueProj, outProj)
-// - Feedforward layers (FlowMLP layers[0], layers[1])
-// BUT NOT LayerNorm weights, embeddings, or Conv1d weights
-var transposedDecoderWeights: [String: MLXArray] = [:]
-for (key, value) in decoderWeightsNoPrefix {
-    // Transpose ALL Linear/FixedLinear weights (2D, excluding LayerNorm and embeddings)
-    // LayerNorm weights don't have "linear" or "Proj" or "mlp" or "layers" in their key
-    // Embeddings would be handled separately
-    let is2DWeight = key.hasSuffix(".weight") && value.ndim == 2
-    let isLinearLayer = is2DWeight && (
-        key.contains("timeMLP.linear") ||      // TimeMLP linear layers
-        key.contains(".mlp.") ||               // ResNet MLP layers (mlpLinear)
-        key.contains("Proj.weight") ||         // Attention projections (queryProj, keyProj, etc.)
-        key.contains(".layers.") ||            // FlowMLP feedforward layers
-        key.contains(".ff.layers.")            // Alternative FF layer naming
-    )
-
-    // Explicitly exclude LayerNorm, GroupNorm, embeddings
-    let isNormLayer = key.contains(".norm") && !key.contains(".norm.") // Avoid false positives like "norm1.weight"
-    let shouldTranspose = isLinearLayer && !isNormLayer
-
-    if shouldTranspose {
-        transposedDecoderWeights[key] = value.T
-        print("  Transposed \(key): \(value.shape) -> \(value.T.shape)")
-    } else {
-        transposedDecoderWeights[key] = value
-    }
-}
-
-// Load directly to decoder
-s3gen.decoder.update(parameters: ModuleParameters.unflattened(transposedDecoderWeights))
+// Load to decoder
+s3gen.decoder.update(parameters: ModuleParameters.unflattened(decoderWeightsRemapped))
 
 // DEBUG: Check the same decoder weight AFTER update
 if let firstWeight = s3gen.decoder.downBlocks[0].resnet.block1.norm.weight {
@@ -510,8 +506,8 @@ print(String(repeating: "=", count: 80))
 // Set deterministic seed to match Python (SEED = 42)
 MLXRandom.seed(42)
 
-// User requested text
-let testText = "Wow! I absolutely cannot believe that it worked on the first try!"
+// User requested text - MUST match Python script's TEXT for cross-testing
+let testText = "Do you think the model can handle the rising intonation at the end of this sentence?"
 let lang = "en"
 
 print("\nGenerating audio for:")
@@ -527,7 +523,8 @@ print("  Tokens: \(tokens.count)")
 
 // CROSS-TEST MODE: Use Python tokens instead of generating with Swift T3
 let usePythonTokens = true  // Set to true to test Python tokens → Swift audio
-let pythonTokens = [1732, 2068, 2186, 1457, 680, 1460, 3647, 5834, 5915, 5266, 5509, 5429, 3242, 569, 572, 599, 683, 719, 1448, 2087, 1976, 1946, 3890, 5192, 4814, 1277, 1736, 3650, 6077, 4780, 2163, 4752, 6377, 6373, 4771, 5014, 5015, 2021, 2020, 4448, 2671, 2112, 411, 2517, 5109, 5838, 5845, 5837, 2367, 4718, 6238, 1226, 2145, 1431, 5006, 3479, 1288, 2267, 5021, 4778, 1855, 4194, 2246, 193, 157, 1679, 2096, 4373, 4349, 6050, 1686, 1032, 2331, 5672, 586, 3990, 38, 4032, 6534, 4320, 4106, 3863, 3146, 4671, 5648, 627, 5325, 1620, 1892, 1865, 5510, 4789, 5186, 731, 734, 737, 116, 386]
+// These tokens are from Python T3 for: "Do you think the model can handle the rising intonation at the end of this sentence?"
+let pythonTokens = [1732, 2490, 3238, 4292, 6317, 4614, 4269, 2223, 4570, 5532, 4308, 999, 4564, 2124, 4314, 662, 4136, 4133, 433, 3314, 5054, 1299, 168, 2203, 1638, 755, 5352, 5361, 2780, 341, 2921, 3825, 387, 2891, 5090, 2082, 2252, 1928, 2182, 4369, 1892, 2027, 3890, 3005, 4526, 6381, 6372, 4415, 3346, 1970, 2006, 2195, 6015, 1284, 4428, 2209, 3747, 23, 359, 2888, 5146, 5319, 4593, 2318, 4469, 3744, 2192, 2219, 2166, 1026, 2510, 539, 251, 2918, 3828, 66, 2414, 1854, 2004, 2261, 4439, 6373, 6458, 3465, 2189, 2198, 1887, 4675, 9, 4412, 4393, 6258, 6261, 6379, 6374, 6377, 6376, 4218, 6405, 6486]
 
 let speechTokens: MLXArray
 if usePythonTokens {
