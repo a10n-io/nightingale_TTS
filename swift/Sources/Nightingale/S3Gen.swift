@@ -71,8 +71,6 @@ public class CausalConv1d: Module {
     let padAmount: Int
     let stride: Int
 
-    public static var debugFirstCall = true
-
     public init(inputChannels: Int, outputChannels: Int, kernelSize: Int, stride: Int = 1, dilation: Int = 1, bias: Bool = true) {
         self.stride = stride
         self.conv = Conv1d(
@@ -89,13 +87,6 @@ public class CausalConv1d: Module {
     }
 
     public func callAsFunction(_ x: MLXArray) -> MLXArray {
-        // Debug first call only
-        if Self.debugFirstCall, let w = conv.weight {
-            eval(w)
-            print("🔍 CausalConv1d first call - weight shape: \(w.shape)")
-            Self.debugFirstCall = false
-        }
-
         // Input x: [B, C, T] (channels-first)
         // MLX Conv1d expects: [B, T, C] (channels-last)
         var h = x.transposed(0, 2, 1) // [B, T, C]

@@ -616,28 +616,69 @@ public actor ChatterboxEngine {
         
         if k.contains("rand_noise") { return nil }
 
-        // Block names
+        // Block names (support both underscore and dot formats)
         k = k.replacingOccurrences(of: "down_blocks_", with: "downBlocks.")
         k = k.replacingOccurrences(of: "mid_blocks_", with: "midBlocks.")
         k = k.replacingOccurrences(of: "up_blocks_", with: "upBlocks.")
+        k = k.replacingOccurrences(of: "down_blocks.", with: "downBlocks.")
+        k = k.replacingOccurrences(of: "mid_blocks.", with: "midBlocks.")
+        k = k.replacingOccurrences(of: "up_blocks.", with: "upBlocks.")
+
+        // CRITICAL: Python UNet structure vs Swift UNet structure
+        // Python: down_blocks[0][0] = CausalResnetBlock1D, [0][1][0-3] = transformers, [0][2] = downsample
+        // Swift: downBlocks[0].resnet, downBlocks[0].transformers[0-3], downBlocks[0].downLayer
+        // Map .0.0. -> .0.resnet. (first inner element is the resnet)
+        k = k.replacingOccurrences(of: "downBlocks.0.0.", with: "downBlocks.0.resnet.")
+        for i in 0...11 {
+            k = k.replacingOccurrences(of: "midBlocks.\(i).0.", with: "midBlocks.\(i).resnet.")
+        }
+        k = k.replacingOccurrences(of: "upBlocks.0.0.", with: "upBlocks.0.resnet.")
+
+        // Map transformer indices: Python uses .0.1.X. where X is transformer index in a nested list
+        k = k.replacingOccurrences(of: "downBlocks.0.1.0.", with: "downBlocks.0.transformers.0.")
+        k = k.replacingOccurrences(of: "downBlocks.0.1.1.", with: "downBlocks.0.transformers.1.")
+        k = k.replacingOccurrences(of: "downBlocks.0.1.2.", with: "downBlocks.0.transformers.2.")
+        k = k.replacingOccurrences(of: "downBlocks.0.1.3.", with: "downBlocks.0.transformers.3.")
+        for i in 0...11 {
+            k = k.replacingOccurrences(of: "midBlocks.\(i).1.0.", with: "midBlocks.\(i).transformers.0.")
+            k = k.replacingOccurrences(of: "midBlocks.\(i).1.1.", with: "midBlocks.\(i).transformers.1.")
+            k = k.replacingOccurrences(of: "midBlocks.\(i).1.2.", with: "midBlocks.\(i).transformers.2.")
+            k = k.replacingOccurrences(of: "midBlocks.\(i).1.3.", with: "midBlocks.\(i).transformers.3.")
+        }
+        k = k.replacingOccurrences(of: "upBlocks.0.1.0.", with: "upBlocks.0.transformers.0.")
+        k = k.replacingOccurrences(of: "upBlocks.0.1.1.", with: "upBlocks.0.transformers.1.")
+        k = k.replacingOccurrences(of: "upBlocks.0.1.2.", with: "upBlocks.0.transformers.2.")
+        k = k.replacingOccurrences(of: "upBlocks.0.1.3.", with: "upBlocks.0.transformers.3.")
+
+        // Downsample/Upsample - Python uses index 2 for down/up convs
+        // downLayer/upLayer are CausalConv1d which contains Conv1d as .conv
+        k = k.replacingOccurrences(of: "downBlocks.0.2.", with: "downBlocks.0.downLayer.conv.")
+        k = k.replacingOccurrences(of: "upBlocks.0.2.", with: "upBlocks.0.upLayer.conv.")
+
+        // CRITICAL: CausalBlock1D structure mapping
+        // Python: block = Sequential(CausalConv1d[0], Transpose[1], LayerNorm[2], ...)
+        // Swift: conv: CausalConv1d (which has .conv: Conv1d), norm: LayerNorm
+        k = k.replacingOccurrences(of: ".block.0.", with: ".conv.conv.")
+        k = k.replacingOccurrences(of: ".block.2.", with: ".norm.")
 
         // ResNet components
-        // CausalBlock1D uses .conv.conv
-        // Python keys: .block1.conv.conv.weight
-        // Swift keys: .block1.conv.conv.weight
-        
+        // Python uses mlp.1 for the linear layer, Swift uses mlpLinear
+        k = k.replacingOccurrences(of: ".mlp.1.", with: ".mlpLinear.")
         k = k.replacingOccurrences(of: "mlp_linear", with: "mlpLinear")
         k = k.replacingOccurrences(of: "res_conv", with: "resConv")
 
         // Transform transformer components
         k = k.replacingOccurrences(of: ".transformer_", with: ".transformers.")
-        // Python uses .attn. but Swift uses .attention.
-        k = k.replacingOccurrences(of: ".attn.", with: ".attention.")
+        k = k.replacingOccurrences(of: ".attn1.", with: ".attention.")
+        k = k.replacingOccurrences(of: "to_q.", with: "queryProj.")
+        k = k.replacingOccurrences(of: "to_k.", with: "keyProj.")
+        k = k.replacingOccurrences(of: "to_v.", with: "valueProj.")
+        k = k.replacingOccurrences(of: "to_out.0.", with: "outProj.")
         k = k.replacingOccurrences(of: "query_proj", with: "queryProj")
         k = k.replacingOccurrences(of: "key_proj", with: "keyProj")
         k = k.replacingOccurrences(of: "value_proj", with: "valueProj")
         k = k.replacingOccurrences(of: "out_proj", with: "outProj")
-        
+
         // Map Conformer Attention Names (linear_*) to Standard Names
         k = k.replacingOccurrences(of: "linear_q", with: "queryProj")
         k = k.replacingOccurrences(of: "linear_k", with: "keyProj")
@@ -647,23 +688,25 @@ public actor ChatterboxEngine {
         if k.contains(".norm3.") {
             k = k.replacingOccurrences(of: ".norm3.", with: ".norm2.")
         }
+        k = k.replacingOccurrences(of: ".ff.net.0.proj.", with: ".ff.layers.0.")
+        k = k.replacingOccurrences(of: ".ff.net.2.", with: ".ff.layers.1.")
         k = k.replacingOccurrences(of: "ff.net.0.", with: "ff.layers.0.")
         k = k.replacingOccurrences(of: "ff.net.2.", with: "ff.layers.1.")
-        
+
         k = k.replacingOccurrences(of: "time_mlp", with: "timeMLP")
         k = k.replacingOccurrences(of: "timeMLP.0.", with: "timeMLP.linear1.")
         k = k.replacingOccurrences(of: "timeMLP.2.", with: "timeMLP.linear2.")
         // Python uses linear_1/linear_2, Swift uses linear1/linear2
         k = k.replacingOccurrences(of: ".linear_1.", with: ".linear1.")
         k = k.replacingOccurrences(of: ".linear_2.", with: ".linear2.")
-        
+
         k = k.replacingOccurrences(of: "downsample", with: "downLayer")
         k = k.replacingOccurrences(of: "upsample", with: "upLayer")
         k = k.replacingOccurrences(of: "final_block", with: "finalBlock")
         k = k.replacingOccurrences(of: "final_proj", with: "finalProj")
-        
+
         k = k.replacingOccurrences(of: "act_post", with: "actPost")
-        
+
         return k
     }
 
