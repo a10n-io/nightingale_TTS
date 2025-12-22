@@ -16,6 +16,10 @@ let package = Package(
             name: "GenerateAudio",
             targets: ["GenerateAudio"]
         ),
+        .executable(
+            name: "CrossValidate",
+            targets: ["CrossValidate"]
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.21.0"),
@@ -38,6 +42,11 @@ let package = Package(
             name: "GenerateAudio",
             dependencies: ["Nightingale"],
             path: "test_scripts/GenerateAudio"
+        ),
+        .executableTarget(
+            name: "CrossValidate",
+            dependencies: ["Nightingale"],
+            path: "test_scripts/CrossValidate"
         ),
     ]
 )

@@ -1153,6 +1153,78 @@ public actor ChatterboxEngine {
         return result
     }
 
+    // MARK: - T3 Only (for cross-validation testing)
+
+    /// Run T3 to generate speech tokens only (no audio synthesis)
+    /// Returns the speech tokens as an array of Ints
+    public func runT3Only(_ text: String, temperature: Float = 0.0001) throws -> [Int] {
+        guard isLoaded else { throw ChatterboxError.modelNotLoaded }
+        guard isVoiceLoaded else { throw ChatterboxError.voiceNotLoaded }
+        guard let t3 = t3, let t3Soul = t3Soul, let t3CondTokens = t3CondTokens else {
+            throw ChatterboxError.modelNotLoaded
+        }
+
+        // Tokenize text
+        let normalizedText = puncNorm(text)
+        let textTokens = try tokenizeText(normalizedText)
+
+        print("Running T3 only...")
+        print("  Text: \"\(normalizedText)\"")
+        print("  Text tokens shape: \(textTokens.shape)")
+
+        // Generate speech tokens
+        let speechTokens = t3.generate(
+            textTokens: textTokens,
+            speakerEmb: t3Soul,
+            condTokens: t3CondTokens,
+            maxTokens: 1000,
+            temperature: temperature,
+            cfgWeight: 0.5,
+            repetitionPenalty: 2.0,
+            topP: 1.0,
+            minP: 0.05
+        )
+
+        // Drop invalid tokens (SOS/EOS)
+        let validTokens = T3Model.dropInvalidTokens(speechTokens)
+        print("  Generated \(validTokens.count) speech tokens")
+        print("  First 20: \(Array(validTokens.prefix(20)))")
+        print("  Last 20: \(Array(validTokens.suffix(20)))")
+
+        return validTokens
+    }
+
+    /// Run S3Gen to synthesize audio from speech tokens using the loaded voice
+    /// Simpler API that uses the currently loaded voice conditioning
+    public func synthesizeFromTokens(_ tokens: [Int]) throws -> [Float] {
+        guard isLoaded else { throw ChatterboxError.modelNotLoaded }
+        guard isVoiceLoaded else { throw ChatterboxError.voiceNotLoaded }
+        guard let s3gen = s3gen, let t3 = t3,
+              let s3Soul = s3Soul, let promptToken = promptToken, let promptFeat = promptFeat else {
+            throw ChatterboxError.modelNotLoaded
+        }
+
+        print("Running S3Gen with \(tokens.count) tokens...")
+
+        let tokensArray = MLXArray(tokens.map { Int32($0) }).expandedDimensions(axis: 0)
+
+        GPU.clearCache()
+
+        let audio = s3gen.generate(
+            tokens: tokensArray,
+            speakerEmb: s3Soul,
+            speechEmbMatrix: t3.speechEmb.weight,
+            promptToken: promptToken,
+            promptFeat: promptFeat
+        )
+
+        eval(audio)
+        let result = audio.asArray(Float.self)
+        print("  Generated \(result.count) samples (\(String(format: "%.2f", Float(result.count) / 24000.0))s)")
+
+        return result
+    }
+
     // MARK: - S3Gen Only (for testing with pre-generated tokens)
 
     /// Run S3Gen with pre-generated speech tokens (skipping T3 entirely)
