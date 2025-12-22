@@ -258,8 +258,22 @@ public actor ChatterboxEngine {
                     print("  \(key)")
                 }
 
+                // DEBUG: Check decoder weight BEFORE update
+                let decoder = s3.decoder
+                let wBefore = decoder.downBlocks[0].resnet.block1.conv.conv.weight
+                eval(wBefore)
+                let beforeSum = wBefore.sum().item(Float.self)
+                print("DEBUG: BEFORE update - decoder weight sum: \(beforeSum)")
+
                 let s3Params = ModuleParameters.unflattened(s3Remapped)
                 s3.update(parameters: s3Params)
+
+                // DEBUG: Check decoder weight AFTER update
+                let wAfter = decoder.downBlocks[0].resnet.block1.conv.conv.weight
+                eval(wAfter)
+                let afterSum = wAfter.sum().item(Float.self)
+                print("DEBUG: AFTER update - decoder weight sum: \(afterSum)")
+                print("DEBUG: Weight changed: \(abs(afterSum - beforeSum) > 0.001 ? "YES (\(afterSum - beforeSum))" : "NO")")
 
                 // DEBUG: Verify decoder and vocoder weights were loaded
                 print("DEBUG: Checking if decoder/vocoder weights were applied...")
