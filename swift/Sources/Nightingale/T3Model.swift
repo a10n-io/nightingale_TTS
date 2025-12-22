@@ -1372,13 +1372,13 @@ public class T3Model: Module {
         textTokens: MLXArray,
         speakerEmb: MLXArray,
         condTokens: MLXArray,
-        maxTokens: Int = 1024,
-        temperature: Float = 0.8,   // Python default: 0.8
-        emotionValue: Float = 0.5,  // Default emotion value
-        cfgWeight: Float = 0.5,     // Python default: 0.5
-        repetitionPenalty: Float = 1.2,  // Python default: 1.2
-        topP: Float = 0.95,         // Python default: 0.95 (use 1.0 for greedy/verification)
-        minP: Float = 0.05          // Python default: 0.05
+        maxTokens: Int = 1000,           // Python: max_new_tokens=1000
+        temperature: Float = 0.0001,     // Near-zero for deterministic (PyTorch crashes at 0)
+        emotionValue: Float = 0.5,       // Default emotion value
+        cfgWeight: Float = 0.5,          // Python: cfg_weight=0.5
+        repetitionPenalty: Float = 2.0,  // Python: repetition_penalty=2.0
+        topP: Float = 1.0,               // Python: top_p=1.0
+        minP: Float = 0.05               // Python: min_p=0.05
     ) -> [Int] {
         print("🚨🚨🚨 LAYER 0 DEBUG BUILD \(Date()) 🚨🚨🚨")
         print("DEBUG T3: generate() called with CFG weight: \(cfgWeight)")

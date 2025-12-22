@@ -731,8 +731,20 @@ public class UpsampleEncoder: Module {
         print("DEBUG Encoder: Calling posEnc (xscale=\(posEnc.xscale))..."); fflush(stdout)
         print("DEBUG Encoder: posEnc.pe shape = \(posEnc.pe.shape) (should be [1, 9999, 512] if loaded)"); fflush(stdout)
         print("DEBUG Encoder: posEnc.pe first 3 = \(posEnc.pe[0, 0, 0..<3])"); fflush(stdout)
+        // DEBUG: Check h BEFORE posEnc
+        eval(h)
+        let hBeforeMin = h.min().item(Float.self)
+        let hBeforeMax = h.max().item(Float.self)
+        print("DEBUG Encoder: h BEFORE posEnc - Range: [\(hBeforeMin), \(hBeforeMax)]"); fflush(stdout)
         let (hScaled, posEmb) = posEnc(h)
         h = hScaled
+        // DEBUG: Check h AFTER posEnc (should be h * xscale)
+        eval(h)
+        let hAfterMin = h.min().item(Float.self)
+        let hAfterMax = h.max().item(Float.self)
+        let actualRatio = hAfterMax / hBeforeMax
+        print("DEBUG Encoder: h AFTER posEnc - Range: [\(hAfterMin), \(hAfterMax)]"); fflush(stdout)
+        print("DEBUG Encoder: Actual scaling ratio: \(actualRatio)x (expected \(posEnc.xscale)x)"); fflush(stdout)
         print("DEBUG Encoder: posEmb shape = \(posEmb.shape)"); fflush(stdout)
 
         // CHECK: After posEnc scaling
@@ -965,10 +977,11 @@ public class UpsampleEncoder: Module {
             }
         }
 
-        // 6. Load up_layer.conv weights
+        // 6. Load up_layer.conv weights - PyTorch [out, in, kernel] -> MLX [out, kernel, in]
         if let w = weights["\(prefix).up_layer.conv.weight"] {
-            upLayer.conv.update(parameters: ModuleParameters.unflattened(["weight": w]))
-            print("  ✅ Loaded up_layer.conv.weight")
+            let transposed = w.swappedAxes(1, 2)
+            upLayer.conv.update(parameters: ModuleParameters.unflattened(["weight": transposed]))
+            print("  ✅ Loaded up_layer.conv.weight: \(w.shape) -> transposed to \(transposed.shape)")
         }
         if let b = weights["\(prefix).up_layer.conv.bias"] {
             upLayer.conv.update(parameters: ModuleParameters.unflattened(["bias": b]))
@@ -2179,15 +2192,29 @@ public class S3Gen: Module {
 
         // Remap encoder weights: s3gen.flow.encoder.* → encoder.*
         // UpsampleEncoder expects "encoder.*" prefix
+        // ALSO: Python uses .embed.out.0. for linear and .embed.out.1. for norm
+        //       Swift expects .embed.linear. and .embed.norm.
         var encoderWeights: [String: MLXArray] = [:]
         for (key, value) in flowWeights {
+            var remappedKey = key
             if key.hasPrefix("s3gen.flow.encoder.") {
-                let remappedKey = key.replacingOccurrences(of: "s3gen.flow.encoder.", with: "encoder.")
-                encoderWeights[remappedKey] = value
+                remappedKey = key.replacingOccurrences(of: "s3gen.flow.encoder.", with: "encoder.")
             } else if key.hasPrefix("flow.encoder.") {
-                let remappedKey = key.replacingOccurrences(of: "flow.encoder.", with: "encoder.")
-                encoderWeights[remappedKey] = value
+                remappedKey = key.replacingOccurrences(of: "flow.encoder.", with: "encoder.")
+            } else {
+                continue  // Not an encoder key
             }
+
+            // CRITICAL: Remap .embed.out.0. → .embed.linear. and .embed.out.1. → .embed.norm.
+            // Python's Sequential([Linear, LayerNorm]) uses indices 0 and 1
+            remappedKey = remappedKey.replacingOccurrences(of: ".embed.out.0.", with: ".embed.linear.")
+            remappedKey = remappedKey.replacingOccurrences(of: ".embed.out.1.", with: ".embed.norm.")
+
+            // Same for up_embed
+            remappedKey = remappedKey.replacingOccurrences(of: ".up_embed.out.0.", with: ".up_embed.linear.")
+            remappedKey = remappedKey.replacingOccurrences(of: ".up_embed.out.1.", with: ".up_embed.norm.")
+
+            encoderWeights[remappedKey] = value
         }
 
         print("DEBUG S3Gen: Creating UpsampleEncoder with \(encoderWeights.count) weights"); fflush(stdout)

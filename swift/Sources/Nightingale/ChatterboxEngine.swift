@@ -116,47 +116,72 @@ public actor ChatterboxEngine {
         }
         print("Using model directory: \(modelDir.path)")
 
-        // Load config
+        // Determine which tokenizer is available to infer model type
+        let mtlTokenizerPath = modelDir.appendingPathComponent("grapheme_mtl_merged_expanded_v1.json").path
+        let isMultilingual = FileManager.default.fileExists(atPath: mtlTokenizerPath)
+        print("Model type: \(isMultilingual ? "Multilingual (2454 vocab)" : "English-only (704 vocab)")")
+
+        // Load config if available, otherwise use Python-compatible defaults
         let configURL = modelDir.appendingPathComponent("config.json")
-        let configData = try Data(contentsOf: configURL)
-        let config = try JSONDecoder().decode(T3Config.self, from: configData)
-        print("Config loaded: \(config.modelType)")
-
-        // Load T3 weights - prefer FP32 if available, fallback to Q4
-        let fp32URL = modelDir.appendingPathComponent("t3_fp32.safetensors")
-        let q4URL = modelDir.appendingPathComponent("model.safetensors")
-        let ropeFreqsURL = modelDir.appendingPathComponent("rope_freqs_llama3.safetensors")
-        var rawWeights: [String: MLXArray]? = nil
-
-        // Check for FP32 weights first (perfect precision, 2GB)
-        if FileManager.default.fileExists(atPath: fp32URL.path) {
-            print("Loading FP32 T3 weights from \(fp32URL.lastPathComponent)...")
-            rawWeights = try MLX.loadArrays(url: fp32URL)
-            print("Loaded \(rawWeights!.count) FP32 weight arrays")
-
-            // Remap keys from Python naming to Swift naming for T3
-            let t3Weights = remapT3Keys(rawWeights!)
-            print("Remapped to \(t3Weights.count) T3 FP32 weights")
-
-            // Create T3Model WITH FP32 weights
-            print("Creating T3Model with FP32 weights for perfect precision...")
-            self.t3 = T3Model(config: config, weights: t3Weights, ropeFreqsURL: ropeFreqsURL)
+        let config: T3Config
+        if FileManager.default.fileExists(atPath: configURL.path) {
+            let configData = try Data(contentsOf: configURL)
+            config = try JSONDecoder().decode(T3Config.self, from: configData)
+            print("Config loaded from config.json: \(config.modelType)")
+        } else {
+            // Use Python-compatible defaults (matching T3Config class in Python)
+            config = isMultilingual ? T3Config.multilingual() : T3Config.default
+            print("Using default config: \(config.modelType) (text_vocab=\(config.textVocabSize))")
         }
-        // Fallback to Q4 quantized weights (smaller, 470MB)
-        else if FileManager.default.fileExists(atPath: q4URL.path) {
-            print("Loading Q4 quantized weights from \(q4URL.lastPathComponent)...")
-            rawWeights = try MLX.loadArrays(url: q4URL)
-            print("Loaded \(rawWeights!.count) Q4 weight arrays from safetensors")
+
+        // T3 weight files in priority order (matching Python's naming conventions)
+        // Python multilingual: t3_mtl23ls_v2.safetensors
+        // Python English: t3_cfg.safetensors
+        // Fallback: t3_fp32.safetensors (MLX converted), model.safetensors (quantized)
+        let t3WeightFiles = isMultilingual
+            ? ["t3_mtl23ls_v2.safetensors", "t3_fp32.safetensors", "model.safetensors"]
+            : ["t3_cfg.safetensors", "t3_fp32.safetensors", "model.safetensors"]
+
+        // RoPE frequencies can be in modelDir or parent mlx/ dir
+        let ropeFreqsURL: URL?
+        let ropeInModelDir = modelDir.appendingPathComponent("rope_freqs_llama3.safetensors")
+        let ropeInMlxDir = modelDir.deletingLastPathComponent().appendingPathComponent("mlx/rope_freqs_llama3.safetensors")
+        if FileManager.default.fileExists(atPath: ropeInModelDir.path) {
+            ropeFreqsURL = ropeInModelDir
+            print("RoPE frequencies: \(ropeInModelDir.lastPathComponent)")
+        } else if FileManager.default.fileExists(atPath: ropeInMlxDir.path) {
+            ropeFreqsURL = ropeInMlxDir
+            print("RoPE frequencies: mlx/\(ropeInMlxDir.lastPathComponent)")
+        } else {
+            ropeFreqsURL = nil
+            print("Warning: rope_freqs_llama3.safetensors not found (will use default RoPE)")
+        }
+
+        // Find and load T3 weights
+        var rawWeights: [String: MLXArray]? = nil
+        var t3WeightsURL: URL? = nil
+        for filename in t3WeightFiles {
+            let url = modelDir.appendingPathComponent(filename)
+            if FileManager.default.fileExists(atPath: url.path) {
+                t3WeightsURL = url
+                break
+            }
+        }
+
+        if let t3URL = t3WeightsURL {
+            print("Loading T3 weights from \(t3URL.lastPathComponent)...")
+            rawWeights = try MLX.loadArrays(url: t3URL)
+            print("Loaded \(rawWeights!.count) weight arrays")
 
             // Remap keys from Python naming to Swift naming for T3
             let t3Weights = remapT3Keys(rawWeights!)
             print("Remapped to \(t3Weights.count) T3 weights")
 
-            // Create T3Model WITH weights (supports quantized 4-bit layers)
-            print("Creating T3Model with Q4 quantized weight loading...")
+            // Create T3Model with weights
+            print("Creating T3Model...")
             self.t3 = T3Model(config: config, weights: t3Weights, ropeFreqsURL: ropeFreqsURL)
         } else {
-            print("Warning: No T3 weights found (checked t3_fp32.safetensors and model.safetensors)")
+            print("Warning: No T3 weights found (checked: \(t3WeightFiles.joined(separator: ", ")))")
             // Fallback: create model without weights (random init)
             self.t3 = T3Model(config: config)
         }
@@ -174,20 +199,22 @@ public actor ChatterboxEngine {
         }
 
         // S3Gen with weight loading
-        // Complete FP16 S3Gen weights are in s3gen_fp16.safetensors (preferred)
-        // Fallback: Flow encoder weights from model.safetensors + decoder from s3_engine.safetensors
-        // Vocoder weights are in vocoder_weights_python.safetensors (extracted from Python with correct shapes)
-        let vocoderURL = modelDir.appendingPathComponent("vocoder_weights_python.safetensors")
+        // Prefer s3gen.safetensors (raw PyTorch weights - same as Python uses)
+        // Fallback: s3gen_fp16.safetensors (pre-converted) or s3_engine.safetensors
+        let s3genPyTorchURL = modelDir.appendingPathComponent("s3gen.safetensors")
         let s3genFP16URL = modelDir.appendingPathComponent("s3gen_fp16.safetensors")
         let s3EngineURL = modelDir.appendingPathComponent("s3_engine.safetensors")
 
-        // Try s3gen_fp16.safetensors first (complete FP16 weights), fallback to quantized
+        // Try s3gen.safetensors first (raw PyTorch weights for exact parity)
         let s3genWeightsURL: URL?
-        if FileManager.default.fileExists(atPath: s3genFP16URL.path) {
-            print("Found complete FP16 S3Gen weights: s3gen_fp16.safetensors")
+        if FileManager.default.fileExists(atPath: s3genPyTorchURL.path) {
+            print("Found raw PyTorch S3Gen weights: s3gen.safetensors")
+            s3genWeightsURL = s3genPyTorchURL
+        } else if FileManager.default.fileExists(atPath: s3genFP16URL.path) {
+            print("Found FP16 S3Gen weights: s3gen_fp16.safetensors")
             s3genWeightsURL = s3genFP16URL
         } else if FileManager.default.fileExists(atPath: s3EngineURL.path) {
-            print("Using s3_engine.safetensors for S3Gen weights (may have quantized components)")
+            print("Using s3_engine.safetensors for S3Gen weights")
             s3genWeightsURL = s3EngineURL
         } else {
             s3genWeightsURL = nil
@@ -208,17 +235,10 @@ public actor ChatterboxEngine {
             }
             print("Merged flow weights: \(flowWeights.count) total arrays")
 
-            // Skip loading vocoder_weights_python.safetensors when s3gen_fp16.safetensors is used
-            // because s3gen_fp16 already includes all vocoder weights in correct MLX format.
-            // The vocoder_weights_python.safetensors has a different architecture that would break things.
-            var vocoderWeights: [String: MLXArray]? = nil
-            let usingFP16 = s3genURL.lastPathComponent == "s3gen_fp16.safetensors"
-            if !usingFP16 && FileManager.default.fileExists(atPath: vocoderURL.path) {
-                vocoderWeights = try MLX.loadArrays(url: vocoderURL)
-                print("Loaded \(vocoderWeights?.count ?? 0) vocoder weight arrays")
-            } else if usingFP16 {
-                print("Skipping vocoder_weights_python.safetensors - s3gen_fp16 already includes vocoder weights")
-            }
+            // s3gen.safetensors and s3gen_fp16.safetensors both include vocoder weights (mel2wav.*)
+            // No separate vocoder file needed
+            let vocoderWeights: [String: MLXArray]? = nil
+            print("Vocoder weights included in \(s3genURL.lastPathComponent) (mel2wav.* keys)")
 
             // Create S3Gen
             // Set deterministic seed for reproducible bias initialization
@@ -241,13 +261,8 @@ public actor ChatterboxEngine {
                 let s3Params = ModuleParameters.unflattened(s3Remapped)
                 s3.update(parameters: s3Params)
 
-                // Only apply vocoder weights if we loaded them separately (not using FP16)
-                if let vw = vocoderWeights {
-                     let vRemapped = remapS3Keys(vw)
-                     print("Loaded \(vRemapped.count) remapped vocoder weights")
-                     let vParams = ModuleParameters.unflattened(vRemapped)
-                     s3.update(parameters: vParams)
-                }
+                // Vocoder weights are already included in flowWeights (mel2wav.* keys)
+                // They get remapped and transposed by remapS3Keys along with everything else
 
                 // NOTE: corrected_embed_norm_weights.safetensors was a previous attempt to fix embedNorm
                 // but step-by-step verification (TestEncoderTrace) shows the ORIGINAL weights from
@@ -281,39 +296,6 @@ public actor ChatterboxEngine {
                 // The ORIGINAL weights from s3gen_fp16.safetensors (mean=0.0078) match Python EXACTLY.
                 // The "corrected" weights were 22.6x larger and broke Python<->Swift parity.
                 // See verify_v2_step6 for verification.
-            }
-        } else if let flowWeights = rawWeights {
-            print("Warning: s3_engine.safetensors not found, S3Gen with encoder weights only")
-            let vocoderWeights = FileManager.default.fileExists(atPath: vocoderURL.path)
-                ? try MLX.loadArrays(url: vocoderURL) : nil
-            // Set deterministic seed for reproducible bias initialization
-            MLXRandom.seed(42)
-            self.s3gen = S3Gen(flowWeights: flowWeights, vocoderWeights: vocoderWeights)
-
-            if let s3 = s3gen {
-                let s3Remapped = remapS3Keys(flowWeights)
-                let s3Params = ModuleParameters.unflattened(s3Remapped)
-                s3.update(parameters: s3Params)
-
-                if let vw = vocoderWeights {
-                     let vRemapped = remapS3Keys(vw)
-                     let vParams = ModuleParameters.unflattened(vRemapped)
-                     s3.update(parameters: vParams)
-                }
-
-                // NOTE: DO NOT load corrected_embed_norm_weights.safetensors
-                // The ORIGINAL weights from s3gen_fp16.safetensors (mean=0.0078) match Python EXACTLY.
-
-                // Apply corrected decoder weights
-                let correctedDecoderURL = modelDir.appendingPathComponent("corrected_decoder_weights.safetensors")
-                if FileManager.default.fileExists(atPath: correctedDecoderURL.path) {
-                    print("Loading corrected decoder weights for Python fidelity...")
-                    let correctedDecoder = try MLX.loadArrays(url: correctedDecoderURL)
-                    let remappedDecoder = remapS3Keys(correctedDecoder)
-                    let correctedDecoderParams = ModuleParameters.unflattened(remappedDecoder)
-                    s3.update(parameters: correctedDecoderParams)
-                    print("✅ Applied corrected decoder weights (56 attention biases)")
-                }
             }
         } else {
             print("Error: No weights available for S3Gen")
@@ -475,11 +457,14 @@ public actor ChatterboxEngine {
                                     !key.contains("norm") && !key.contains("embedding")
                 let isEncoderConv = key.contains("encoder") && key.hasSuffix(".weight") && w.ndim == 3 &&
                                     !key.contains("norm") && !key.contains("embedding") && !key.contains("position")
-                let isVocoderConv = (key.hasPrefix("conv_pre") || key.hasPrefix("conv_post") ||
-                                     key.hasPrefix("resblocks") || key.hasPrefix("ups") ||
-                                     key.hasPrefix("f0_predictor") || key.hasPrefix("source_downs") ||
-                                     key.hasPrefix("source_resblocks")) &&
-                                    key.hasSuffix(".weight") && w.ndim == 3
+                // Vocoder Conv1d - keys come from mel2wav.* so use contains, not hasPrefix
+                // EXCLUDE .ups. which are ConvTranspose1d (different format)
+                let isVocoderConv = (key.contains("conv_pre") || key.contains("conv_post") ||
+                                     key.contains("resblocks") ||
+                                     key.contains("f0_predictor.condnet") || key.contains("source_downs") ||
+                                     key.contains("source_resblocks")) &&
+                                    key.hasSuffix(".weight") && w.ndim == 3 &&
+                                    !key.contains("norm") && !key.contains(".ups.")
 
                 if isDecoderConv || isEncoderConv || isVocoderConv {
                     // PyTorch Conv1d: [out_channels, in_channels, kernel_size]
@@ -487,10 +472,20 @@ public actor ChatterboxEngine {
                     w = w.transposed(0, 2, 1)
                 }
 
+                // ConvTranspose1d weight transposition (vocoder upsampling layers):
+                // PyTorch ConvTranspose1d: [in_channels, out_channels, kernel_size]
+                // MLX ConvTransposed1d: [out_channels, kernel_size, in_channels]
+                let isConvTranspose = key.contains(".ups.") && key.hasSuffix(".weight") && w.ndim == 3
+                if isConvTranspose {
+                    // PyTorch: [in, out, kernel] -> MLX: [out, kernel, in]
+                    // Permute (1, 2, 0): new[0]=old[1], new[1]=old[2], new[2]=old[0]
+                    w = w.transposed(1, 2, 0)
+                }
+
                 // Vocoder Linear weight transposition:
                 // - f0_predictor.classifier.weight: (1, 512) -> (512, 1)
                 // - m_source.l_linear.weight: (1, 9) -> (9, 1)
-                let isVocoderLinear = (key.hasPrefix("f0_predictor.classifier") || key.hasPrefix("m_source.l_linear")) &&
+                let isVocoderLinear = (key.contains("f0_predictor.classifier") || key.contains("m_source.l_linear")) &&
                                       key.hasSuffix(".weight") && w.ndim == 2
                 if isVocoderLinear {
                     w = w.transposed()
@@ -772,7 +767,7 @@ public actor ChatterboxEngine {
 
     // MARK: - Speech Generation
 
-    public func speak(_ text: String, temperature: Float = 0.3) async throws {
+    public func speak(_ text: String, temperature: Float = 0.0001) async throws {
         guard isLoaded else { throw ChatterboxError.modelNotLoaded }
         guard isVoiceLoaded else { throw ChatterboxError.voiceNotLoaded }
         guard let t3 = t3, let s3gen = s3gen, let t3Soul = t3Soul, let s3Soul = s3Soul,
@@ -798,12 +793,17 @@ public actor ChatterboxEngine {
             print("Using token chaining prompt (\(suffix.count) tokens)")
         }
 
+        // Use Python's exact defaults from mtl_tts.py generate() method
         let speechTokens = t3.generate(
             textTokens: textTokens,
             speakerEmb: t3Soul,
             condTokens: currentCondTokens,
-            maxTokens: 150,
-            temperature: temperature
+            maxTokens: 1000,           // Python: max_new_tokens=1000
+            temperature: temperature,   // Passed from caller (Python default: 0.8)
+            cfgWeight: 0.5,            // Python: cfg_weight=0.5
+            repetitionPenalty: 2.0,    // Python: repetition_penalty=2.0
+            topP: 1.0,                 // Python: top_p=1.0
+            minP: 0.05                 // Python: min_p=0.05
         )
 
         let elapsed = CFAbsoluteTimeGetCurrent() - startTime
@@ -836,7 +836,7 @@ public actor ChatterboxEngine {
         }
     }
 
-    public func speakStreaming(_ text: String, chunkSize: Int = 50, temperature: Float = 0.3) async throws {
+    public func speakStreaming(_ text: String, chunkSize: Int = 50, temperature: Float = 0.0001) async throws {
         // Implementation similar to speak but chunked. 
         // For brevity in this fix, reusing standard logic pattern.
         // Assuming user will use 'speak' for testing in main.swift
@@ -1036,7 +1036,7 @@ public actor ChatterboxEngine {
 
     // MARK: - Audio Generation (returns data instead of playing)
 
-    public func generateAudio(_ text: String, temperature: Float = 0.4) async throws -> [Float] {
+    public func generateAudio(_ text: String, temperature: Float = 0.0001) async throws -> [Float] {
         print("DEBUG: generateAudio() called with text: \"\(text)\""); fflush(stdout)
         guard isLoaded else { throw ChatterboxError.modelNotLoaded }
         guard isVoiceLoaded else { throw ChatterboxError.voiceNotLoaded }
@@ -1074,15 +1074,19 @@ public actor ChatterboxEngine {
         print("   Expected: [3782, 6486, 6405, 4218, 2031, 2922, 2203, 4814, 4813, 4850, 395, 395, 395, 638, 638, 638, 2582, 2582, 1520, 2031]")
 
         print("DEBUG: Calling T3 generate..."); fflush(stdout)
-        // Match Python FP32 default (1.2) since we're using FP32 T3 weights
-        // Note: Q4 quantized models may need 1.8 to avoid loops, but FP32 works best at 1.2
+        // Use Python's exact defaults from mtl_tts.py generate() method
+        // Python: max_new_tokens=1000, temperature=0.8, cfg_weight=0.5,
+        //         repetition_penalty=2.0, top_p=1.0, min_p=0.05
         let speechTokens = t3.generate(
             textTokens: textTokens,
             speakerEmb: t3Soul,
             condTokens: currentCondTokens,
-            maxTokens: 150,
-            temperature: temperature,
-            repetitionPenalty: 1.2  // Match Python FP32 (was 1.8 for Q4)
+            maxTokens: 1000,           // Python: max_new_tokens=1000
+            temperature: temperature,   // Passed from caller (Python default: 0.8)
+            cfgWeight: 0.5,            // Python: cfg_weight=0.5
+            repetitionPenalty: 2.0,    // Python: repetition_penalty=2.0
+            topP: 1.0,                 // Python: top_p=1.0
+            minP: 0.05                 // Python: min_p=0.05
         )
         print("DEBUG: T3 generate returned \(speechTokens.count) speech tokens"); fflush(stdout)
 

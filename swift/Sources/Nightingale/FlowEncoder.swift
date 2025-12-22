@@ -278,15 +278,20 @@ public class PreLookaheadLayer: Module {
 
         super.init()
 
-        // Load weights - Conv weights are [outCh, kernelSize, inCh] in MLX
+        // Load weights - PyTorch Conv1d: [out, in, kernel], MLX: [out, kernel, in]
+        // Need to transpose axes 1 and 2
         if let w = weights["\(prefix).conv1.weight"] {
-            conv1.update(parameters: ModuleParameters.unflattened(["weight": w]))
+            let transposed = w.swappedAxes(1, 2)
+            print("  ✅ Loaded \(prefix).conv1.weight: \(w.shape) -> transposed to \(transposed.shape)")
+            conv1.update(parameters: ModuleParameters.unflattened(["weight": transposed]))
         }
         if let b = weights["\(prefix).conv1.bias"] {
             conv1.update(parameters: ModuleParameters.unflattened(["bias": b]))
         }
         if let w = weights["\(prefix).conv2.weight"] {
-            conv2.update(parameters: ModuleParameters.unflattened(["weight": w]))
+            let transposed = w.swappedAxes(1, 2)
+            print("  ✅ Loaded \(prefix).conv2.weight: \(w.shape) -> transposed to \(transposed.shape)")
+            conv2.update(parameters: ModuleParameters.unflattened(["weight": transposed]))
         }
         if let b = weights["\(prefix).conv2.bias"] {
             conv2.update(parameters: ModuleParameters.unflattened(["bias": b]))
@@ -332,8 +337,11 @@ public class UpLayer: Module {
 
         super.init()
 
+        // PyTorch Conv1d: [out, in, kernel], MLX: [out, kernel, in]
         if let w = weights["\(prefix).conv.weight"] {
-            conv.update(parameters: ModuleParameters.unflattened(["weight": w]))
+            let transposed = w.swappedAxes(1, 2)
+            print("  ✅ Loaded \(prefix).conv.weight: \(w.shape) -> transposed to \(transposed.shape)")
+            conv.update(parameters: ModuleParameters.unflattened(["weight": transposed]))
         }
         if let b = weights["\(prefix).conv.bias"] {
             conv.update(parameters: ModuleParameters.unflattened(["bias": b]))
