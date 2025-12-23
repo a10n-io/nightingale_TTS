@@ -277,8 +277,113 @@ public actor ChatterboxEngine {
                 let beforeSum = wBefore.sum().item(Float.self)
                 print("DEBUG: BEFORE update - decoder weight sum: \(beforeSum)")
 
+                // DEBUG: Check what keys we're trying to update with
+                print("\n" + String(repeating: "=", count: 60))
+                print("DEBUG: BEFORE MODULE.UPDATE()")
+                print(String(repeating: "=", count: 60))
+                print("Total remapped keys: \(s3Remapped.count)")
+
+                // Check for specific encoder keys we expect
+                let embedLinearKey = "encoder.embedLinear.weight"
+                let embedNormKey = "encoder.embedNorm.weight"
+                print("\nChecking key presence:")
+                print("  '\(embedLinearKey)': \(s3Remapped.keys.contains(embedLinearKey) ? "✅ FOUND" : "❌ MISSING")")
+                print("  '\(embedNormKey)': \(s3Remapped.keys.contains(embedNormKey) ? "✅ FOUND" : "❌ MISSING")")
+
+                // Show what encoder keys we DO have
+                let allEncoderKeys = s3Remapped.keys.filter { $0.hasPrefix("encoder.") }.sorted()
+                print("\nFound \(allEncoderKeys.count) encoder keys. First 30:")
+                for key in allEncoderKeys.prefix(30) {
+                    print("  \(key)")
+                }
+
+                // CRITICAL: Check Conformer block keys after remapping
+                print("\n🔍 Conformer Block Keys (encoders.0):")
+                let conformer0Keys = allEncoderKeys.filter { $0.contains(".encoders.0.") }.sorted()
+                for key in conformer0Keys.prefix(20) {
+                    print("  ✓ \(key)")
+                }
+
+                // Check S3Gen's actual property structure
+                print("\nS3Gen property structure (via Mirror):")
+                let s3Mirror = Mirror(reflecting: s3)
+                for child in s3Mirror.children {
+                    if let label = child.label {
+                        print("  Property: \(label)")
+                        if label == "encoder" {
+                            let encoderMirror = Mirror(reflecting: child.value)
+                            print("    encoder sub-properties:")
+                            for encoderChild in encoderMirror.children.prefix(10) {
+                                print("      \(encoderChild.label ?? "nil")")
+                            }
+                        }
+                    }
+                }
+
                 let s3Params = ModuleParameters.unflattened(s3Remapped)
+
+                // DEBUG: Check unflattened structure
+                print("\n🔍 Unflattened structure for encoder.encoders:")
+                if let encoder = s3Params["encoder"], case .dictionary(let encoderDict) = encoder {
+                    if let encoders = encoderDict["encoders"] {
+                        print("  encoder.encoders type: \(encoders)")
+                        if case .array(let encodersArray) = encoders {
+                            print("  ✅ encoder.encoders is an ARRAY with \(encodersArray.count) elements")
+                            if encodersArray.count > 0, case .dictionary(let block0) = encodersArray[0] {
+                                print("  encoder.encoders.0 keys: \(block0.keys.sorted().prefix(10))")
+                            }
+                        } else if case .dictionary(let encodersDict) = encoders {
+                            print("  ❌ encoder.encoders is a DICTIONARY (should be array!)")
+                            print("     Keys: \(encodersDict.keys.sorted().prefix(10))")
+                        }
+                    } else {
+                        print("  ❌ encoder.encoders NOT FOUND in unflattened structure")
+                    }
+                }
+
+                // DEBUG: Module.update() is unreliable - weights are loaded directly in UpsampleEncoder.load()
+                print("\nNOTE: embedLinear/upEmbedLinear weights loaded directly in encoder.load()")
+
+                // CRITICAL: Check Conv1d weight shapes after remapping
+                print("\n🔍 Checking Conv1d weight shapes after remapping:")
+                if let preLookaheadConv1 = s3Remapped["encoder.preLookaheadLayer.conv1.weight"] {
+                    print("  encoder.preLookaheadLayer.conv1.weight: \(preLookaheadConv1.shape)")
+                    print("    Expected: [512, 4, 512] (MLX format: [out, kernel, in])")
+                }
+                if let upLayerConv = s3Remapped["encoder.upLayer.conv.weight"] {
+                    print("  encoder.upLayer.conv.weight: \(upLayerConv.shape)")
+                    print("    Expected: [512, 5, 512] (MLX format: [out, kernel, in])")
+                }
+
+                // CRITICAL: Check weights BEFORE update
+                let embedLinearBefore = s3.encoder.embedLinear.weight
+                eval(embedLinearBefore)
+                let embedLinearBeforeSum = embedLinearBefore.sum().item(Float.self)
+                print("\n🔍 BEFORE update - encoder.embedLinear.weight sum: \(embedLinearBeforeSum)")
+
+                let encoder0_w1_before = s3.encoder.encoders[0].feedForward.w1.weight
+                eval(encoder0_w1_before)
+                let w1BeforeSum = encoder0_w1_before.sum().item(Float.self)
+                print("🔍 BEFORE update - encoder.encoders.0.feedForward.w1.weight sum: \(w1BeforeSum)")
+
+                print("\nCalling s3.update(parameters: s3Params)...")
                 s3.update(parameters: s3Params)
+                print("✅ update() returned (check if weights changed below)")
+
+                // CRITICAL: Check weights AFTER update
+                let embedLinearAfter = s3.encoder.embedLinear.weight
+                eval(embedLinearAfter)
+                let embedLinearAfterSum = embedLinearAfter.sum().item(Float.self)
+                print("🔍 AFTER update - encoder.embedLinear.weight sum: \(embedLinearAfterSum)")
+                print("🔍 embedLinear changed: \(abs(embedLinearAfterSum - embedLinearBeforeSum) > 0.001 ? "✅ YES (\(embedLinearAfterSum - embedLinearBeforeSum))" : "❌ NO - Not loading!")")
+
+                let encoder0_w1_after = s3.encoder.encoders[0].feedForward.w1.weight
+                eval(encoder0_w1_after)
+                let w1AfterSum = encoder0_w1_after.sum().item(Float.self)
+                print("🔍 AFTER update - encoder.encoders.0.feedForward.w1.weight sum: \(w1AfterSum)")
+                print("🔍 Conformer w1 changed: \(abs(w1AfterSum - w1BeforeSum) > 0.001 ? "✅ YES (\(w1AfterSum - w1BeforeSum))" : "❌ NO - Module.update() didn't propagate to arrays!")")
+
+                print(String(repeating: "=", count: 60))
 
                 // DEBUG: Check decoder weight AFTER update
                 let wAfter = decoder.downBlocks[0].resnet.block1.conv.conv.weight
@@ -286,6 +391,51 @@ public actor ChatterboxEngine {
                 let afterSum = wAfter.sum().item(Float.self)
                 print("DEBUG: AFTER update - decoder weight sum: \(afterSum)")
                 print("DEBUG: Weight changed: \(abs(afterSum - beforeSum) > 0.001 ? "YES (\(afterSum - beforeSum))" : "NO")")
+
+                // DEBUG: Check encoder_proj weights AFTER update (CRITICAL FOR FORENSICS)
+                print("\n" + String(repeating: "=", count: 60))
+                print("ENCODER_PROJ WEIGHTS AFTER UPDATE")
+                print(String(repeating: "=", count: 60))
+                let encoderProjWeight = s3.encoderProj.weight
+                eval(encoderProjWeight)
+                let projShape = encoderProjWeight.shape
+                let projMean = encoderProjWeight.mean()
+                let projStd = encoderProjWeight.variance().sqrt()
+                let projMin = encoderProjWeight.min()
+                let projMax = encoderProjWeight.max()
+                eval(projMean, projStd, projMin, projMax)
+                print("Shape: \(projShape)")
+                print("Mean:  \(projMean.item(Float.self))")
+                print("Std:   \(projStd.item(Float.self))")
+                print("Range: [\(projMin.item(Float.self)), \(projMax.item(Float.self))]")
+
+                // Check first few values
+                if projShape.count >= 2 && projShape[0] >= 5 {
+                    let firstCol = encoderProjWeight[0..<5, 0]
+                    eval(firstCol)
+                    let firstColArr = (0..<5).map { firstCol[$0].item(Float.self) }
+                    print("First 5 (Col 0): \(firstColArr)")
+                }
+
+                // Expected values from Python
+                print("\nExpected (Python encoder_proj.weight):")
+                print("  Shape: [80, 512] (PyTorch) -> [512, 80] (MLX after transpose)")
+                print("  Mean:  ~0.0001")
+                print("  Std:   ~0.0255")
+                print("  First 5 (Row 0 in PyTorch): [-0.0356, -0.0007, 0.0121, -0.0479, -0.0057]")
+
+                // Diagnosis
+                if abs(projStd.item(Float.self) - 0.0255) < 0.005 {
+                    print("\n✅ Weights loaded correctly! Std matches Python.")
+                } else if projStd.item(Float.self) > 0.04 {
+                    print("\n❌ Weights look like random init! Std too high.")
+                    print("   → update() did NOT apply encoder_proj weights!")
+                } else if projStd.item(Float.self) < 0.01 {
+                    print("\n❌ Weights suspiciously small! Std too low.")
+                } else {
+                    print("\n⚠️  Weights unclear - std=\(projStd.item(Float.self)) (expected ~0.0255)")
+                }
+                print(String(repeating: "=", count: 60) + "\n")
 
                 // DEBUG: Verify decoder and vocoder weights were loaded
                 print("DEBUG: Checking if decoder/vocoder weights were applied...")
@@ -526,9 +676,11 @@ public actor ChatterboxEngine {
                 let isTimeMLP = key.contains("time_mlp") && key.contains("linear") && key.hasSuffix(".weight") && finalW.ndim == 2
                 let isSpkEmbedAffine = key.contains("spk_embed_affine_layer") && key.hasSuffix(".weight") && finalW.ndim == 2
                 let isEncoderProj = key.contains("encoder_proj") && key.hasSuffix(".weight") && finalW.ndim == 2
-                // Encoder linear weights: embed.linear, feed_forward.w_1/w_2, self_attn.linear_*
+                // Encoder linear weights: Check ORIGINAL Python keys before remapping
+                // Original keys: flow.encoder.embed.out.0, flow.encoder.up_embed.out.0, feed_forward.w_1/w_2, self_attn.linear_*
                 let isEncoderLinear = key.contains("encoder") && key.hasSuffix(".weight") && finalW.ndim == 2 &&
-                                      (key.contains(".linear") || key.contains("feed_forward.w_"))
+                                      (key.contains(".embed.out.0.") || key.contains(".up_embed.out.0.") ||
+                                       key.contains("feed_forward.w_") || key.contains("self_attn.linear_"))
 
                 if (isDecoderLinear || isTimeMLP || isSpkEmbedAffine || isEncoderProj || isEncoderLinear) && !key.contains(".conv.") && !key.contains("norm.") {
                     // PyTorch Linear: [out_features, in_features] -> MLX: [in_features, out_features]
@@ -624,8 +776,16 @@ public actor ChatterboxEngine {
             // FlowEncoder uses nested structure matching Python's encoder keys
             // Only minimal remapping needed for naming convention differences
 
-            // Keep embed structure: encoder.embed.linear, encoder.embed.norm, encoder.embed.pos_enc
-            // (no flattening needed)
+            // CRITICAL: Python uses Sequential for embed/up_embed, which creates .out.0, .out.1 indices
+            // Swift uses separate properties: embedLinear, embedNorm, etc.
+            k = k.replacingOccurrences(of: ".embed.out.0.", with: ".embedLinear.")
+            k = k.replacingOccurrences(of: ".embed.out.1.", with: ".embedNorm.")
+            k = k.replacingOccurrences(of: ".up_embed.out.0.", with: ".upEmbedLinear.")
+            k = k.replacingOccurrences(of: ".up_embed.out.1.", with: ".upEmbedNorm.")
+
+            // Convert pos_enc to posEnc (position encoding)
+            k = k.replacingOccurrences(of: ".embed.pos_enc.", with: ".posEnc.")
+            k = k.replacingOccurrences(of: ".up_embed.pos_enc.", with: ".upPosEnc.")
 
             // Convert snake_case to camelCase for module names
             k = k.replacingOccurrences(of: "pre_lookahead_layer", with: "preLookaheadLayer")
@@ -634,6 +794,24 @@ public actor ChatterboxEngine {
             // Convert Python's encoders_N to Swift's encoders.N
             for i in 0..<6 { k = k.replacingOccurrences(of: "encoders_\(i).", with: "encoders.\(i).") }
             for i in 0..<4 { k = k.replacingOccurrences(of: "up_encoders.\(i).", with: "upEncoders.\(i).") }
+
+            // Convert Conformer block snake_case to camelCase
+            // Python: norm_mha, self_attn, norm_ff, feed_forward
+            // Swift:  normMHA, attention, normFF, feedForward
+            k = k.replacingOccurrences(of: ".norm_mha.", with: ".normMHA.")
+            k = k.replacingOccurrences(of: ".self_attn.", with: ".attention.")
+            k = k.replacingOccurrences(of: ".norm_ff.", with: ".normFF.")
+            k = k.replacingOccurrences(of: ".feed_forward.", with: ".feedForward.")
+
+            // Convert feed_forward weight names: w_1 -> w1, w_2 -> w2
+            k = k.replacingOccurrences(of: ".w_1.", with: ".w1.")
+            k = k.replacingOccurrences(of: ".w_2.", with: ".w2.")
+
+            // Convert attention layer names: linear_pos -> linearPos
+            k = k.replacingOccurrences(of: ".linear_pos.", with: ".linearPos.")
+            // pos_bias_u and pos_bias_v need camelCase too
+            k = k.replacingOccurrences(of: ".pos_bias_u", with: ".posBiasU")
+            k = k.replacingOccurrences(of: ".pos_bias_v", with: ".posBiasV")
 
             // Convert after_norm to afterNorm
             k = k.replacingOccurrences(of: "after_norm", with: "afterNorm")
