@@ -2232,10 +2232,17 @@ public class Mel2Wav: Module {
         let sSTFT = concatenated([sReal, sImag], axis: 1) // [B, F(18), Frames]
         // var si = sSTFT.transposed(0, 2, 1) // REMOVED unused variable
 
+        if Mel2Wav.debugEnabled {
+            eval(sSTFT)
+            print("\n--- Step 0c: Source STFT ---")
+            print("   s_stft shape: \(sSTFT.shape)")
+            print("   s_stft range: [\(sSTFT.min().item(Float.self)), \(sSTFT.max().item(Float.self))]")
+        }
+
         // CRITICAL DEBUG: Check Conv1d weight shape to detect transposition issue
         if Mel2Wav.debugEnabled {
             eval(convPre.weight)
-            print("🔍 VOCODER convPre.weight shape: \(convPre.weight.shape)")
+            print("\n🔍 VOCODER convPre.weight shape: \(convPre.weight.shape)")
             print("   Expected MLX format: [out_channels(512), kernel_size(7), in_channels(80)]")
             print("   PyTorch format would be: [out_channels(512), in_channels(80), kernel_size(7)]")
         }
@@ -2243,9 +2250,32 @@ public class Mel2Wav: Module {
         // Main Path
         x = convPre(x)  // [B, L, 512]
 
+        if Mel2Wav.debugEnabled {
+            eval(x)
+            print("\n--- Step 1: conv_pre ---")
+            print("   Shape: \(x.shape)")
+            print("   Range: [\(x.min().item(Float.self)), \(x.max().item(Float.self))]")
+            print("   Mean: \(x.mean().item(Float.self)), Std: \(x.variance().sqrt().item(Float.self))")
+        }
+
         for i in 0..<ups.count {
+            if Mel2Wav.debugEnabled {
+                print("\n--- Upsampling Stage \(i) ---")
+            }
+
             x = leakyRelu(x, negativeSlope: 0.1)
+
+            if Mel2Wav.debugEnabled {
+                print("   Before ups[\(i)]: \(x.shape)")
+            }
+
             x = ups[i](x)  // Upsample
+
+            if Mel2Wav.debugEnabled {
+                eval(x)
+                print("   After ups[\(i)]: \(x.shape)")
+                print("   Range: [\(x.min().item(Float.self)), \(x.max().item(Float.self))]")
+            }
 
             // Source Fusion
             // si is [B, T_current, F_current]
@@ -2263,9 +2293,26 @@ public class Mel2Wav: Module {
             // It doesn't accumulate si downsampling. It downsamples from fresh each time.
             
             var siLocal = sSTFT.transposed(0, 2, 1) // [B, T, 18]
+
+            if Mel2Wav.debugEnabled && i == 0 {
+                eval(siLocal)
+                print("   🔍 DEBUG source stage \(i): After transpose: shape=\(siLocal.shape), range=[\(siLocal.min().item(Float.self)), \(siLocal.max().item(Float.self))], mean=\(siLocal.mean().item(Float.self))")
+            }
+
             siLocal = sourceDowns[i](siLocal)
+
+            if Mel2Wav.debugEnabled && i == 0 {
+                eval(siLocal)
+                print("   🔍 DEBUG source stage \(i): After sourceDowns: shape=\(siLocal.shape), range=[\(siLocal.min().item(Float.self)), \(siLocal.max().item(Float.self))], mean=\(siLocal.mean().item(Float.self))")
+            }
+
             siLocal = sourceResBlocks[i](siLocal)
-            
+
+            if Mel2Wav.debugEnabled {
+                eval(siLocal)
+                print("   Source fusion add (after sourceResBlocks[\(i)]): mean=\(siLocal.mean().item(Float.self)), range=[\(siLocal.min().item(Float.self)), \(siLocal.max().item(Float.self))]")
+            }
+
             // Add to x. Check shapes.
             // x might be slightly different due to padding?
             if x.shape[1] != siLocal.shape[1] {
@@ -2274,7 +2321,7 @@ public class Mel2Wav: Module {
                 x = x[0..., 0..<minLen, 0...]
                 siLocal = siLocal[0..., 0..<minLen, 0...]
             }
-            
+
             x = x + siLocal
 
             // Apply residual blocks
@@ -2285,12 +2332,40 @@ public class Mel2Wav: Module {
                  if let acc = xs { xs = acc + resX } else { xs = resX }
             }
             x = xs! / 3.0
+
+            if Mel2Wav.debugEnabled {
+                eval(x)
+                print("   After ResBlocks: \(x.shape)")
+                print("   Range: [\(x.min().item(Float.self)), \(x.max().item(Float.self))]")
+                print("   Mean: \(x.mean().item(Float.self)), Std: \(x.variance().sqrt().item(Float.self))")
+            }
         }
 
         // NOTE: Python uses F.leaky_relu(x) here (no slope arg), which defaults to 0.01
         // The upsampling loop uses 0.1, but this final one uses PyTorch's default of 0.01
         x = leakyRelu(x, negativeSlope: 0.01)
         x = convPost(x)  // [B, L*480, 18]
+
+        if Mel2Wav.debugEnabled {
+            eval(x)
+            print("🔍 VOC conv_post output (STFT params):")
+            print("   Shape: \(x.shape)")
+            print("   Range: [\(x.min().item(Float.self)), \(x.max().item(Float.self))]")
+            print("   Mean: \(x.mean().item(Float.self))")
+
+            // Check magnitude/phase before ISTFT
+            let nHalf = 9
+            let mag = clip(exp(x[0..., 0..., 0..<nHalf]), max: 100.0)
+            let phaseSin = sin(x[0..., 0..., nHalf...])
+            eval(mag)
+            eval(phaseSin)
+            print("🔍 VOC Magnitude (before ISTFT):")
+            print("   Shape: \(mag.shape), Range: [\(mag.min().item(Float.self)), \(mag.max().item(Float.self))]")
+            print("   Mean: \(mag.mean().item(Float.self))")
+            print("🔍 VOC Phase/sin (before ISTFT):")
+            print("   Shape: \(phaseSin.shape), Range: [\(phaseSin.min().item(Float.self)), \(phaseSin.max().item(Float.self))]")
+            print("   Mean: \(phaseSin.mean().item(Float.self))")
+        }
 
         // ISTFT and clip audio to [-0.99, 0.99] (matching Python line 794)
         let audio = istft_hifigan(x)
@@ -2803,6 +2878,7 @@ public class S3Gen: Module {
                     .replacingOccurrences(of: "f0_predictor", with: "f0Predictor")
                     .replacingOccurrences(of: "m_source.l_linear", with: "mSource.linear")
                     .replacingOccurrences(of: "source_downs", with: "sourceDowns")
+                    .replacingOccurrences(of: "source_resblocks", with: "sourceResBlocks")
                     .replacingOccurrences(of: "activations1", with: "acts1")
                     .replacingOccurrences(of: "activations2", with: "acts2")
 
@@ -2840,6 +2916,8 @@ public class S3Gen: Module {
                     .replacingOccurrences(of: "conv_pre", with: "convPre")
                     .replacingOccurrences(of: "conv_post", with: "convPost")
                     .replacingOccurrences(of: "f0_predictor", with: "f0Predictor")
+                    .replacingOccurrences(of: "source_downs", with: "sourceDowns")
+                    .replacingOccurrences(of: "source_resblocks", with: "sourceResBlocks")
                     .replacingOccurrences(of: "activations1", with: "acts1")
                     .replacingOccurrences(of: "activations2", with: "acts2")
 
@@ -2924,6 +3002,25 @@ public class S3Gen: Module {
             // Apply weights to vocoder
             self.vocoder.update(parameters: ModuleParameters.unflattened(processedVocoderWeights))
             print("DEBUG S3Gen: Vocoder weights loaded via vocoder.update()"); fflush(stdout)
+
+            // Verify weights actually loaded by checking a known weight
+            print("DEBUG S3Gen: Verifying vocoder weights..."); fflush(stdout)
+            let convPreW = self.vocoder.convPre.weight
+            eval(convPreW)
+            print("DEBUG S3Gen: 🔍 Vocoder convPre.weight shape: \(convPreW.shape)"); fflush(stdout)
+            print("DEBUG S3Gen: 🔍 Vocoder convPre.weight[0,0,:5]: \(convPreW[0, 0, 0..<5].asArray(Float.self))"); fflush(stdout)
+
+            let mSourceW = self.vocoder.mSource.linear.weight
+            eval(mSourceW)
+            print("DEBUG S3Gen: 🔍 Vocoder mSource.linear.weight shape: \(mSourceW.shape)"); fflush(stdout)
+            print("DEBUG S3Gen: 🔍 Vocoder mSource.linear.weight values: \(mSourceW.flattened().asArray(Float.self))"); fflush(stdout)
+            print("DEBUG S3Gen:    Expected: [-0.0012, -0.0003, -0.0004, 0.0011, 0.0014, 0.0018, -0.0004, -0.0010, -0.0019]"); fflush(stdout)
+
+            // Verify sourceResBlocks weights
+            let srcRB0C1W = self.vocoder.sourceResBlocks[0].convs1[0].weight
+            eval(srcRB0C1W)
+            print("DEBUG S3Gen: 🔍 sourceResBlocks[0].convs1[0].weight shape: \(srcRB0C1W.shape)"); fflush(stdout)
+            print("DEBUG S3Gen: 🔍 sourceResBlocks[0].convs1[0].weight[0,0,:5]: \(srcRB0C1W[0, 0, 0..<5].asArray(Float.self))"); fflush(stdout)
         } else {
             print("⚠️ WARNING: No vocoder weights provided!"); fflush(stdout)
         }
