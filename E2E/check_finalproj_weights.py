@@ -1,32 +1,49 @@
-#!/usr/bin/env python3
-"""Check Python finalProj weights."""
-import torch
-from pathlib import Path
-from chatterbox.mtl_tts import ChatterboxMultilingualTTS
+"""
+Check finalProj weights in Python to compare with Swift.
+"""
+from safetensors.torch import load_file
 
-# Load model
-MODELS_DIR = Path("models/chatterbox")
-device = "cpu"
+state_dict = load_file("/Users/a10n/Projects/nightingale_TTS/models/chatterbox/s3gen.safetensors")
 
-print("Loading Chatterbox model...")
-model = ChatterboxMultilingualTTS.from_local(MODELS_DIR, device=device)
+print("=" * 80)
+print("FINALPROJ WEIGHT CHECK")
+print("=" * 80)
 
-decoder = model.s3gen.flow.decoder.estimator
+# Check finalProj weight
+key_w = "flow.decoder.final_proj.weight"
+key_b = "flow.decoder.final_proj.bias"
 
-# Check finalProj weights
-fp_weight = decoder.final_proj.weight  # Should be [80, 256, 1]
-fp_bias = decoder.final_proj.bias  # Should be [80]
+if key_w in state_dict:
+    w = state_dict[key_w]
+    print(f"\n{key_w}:")
+    print(f"   Shape (PyTorch): {w.shape}")  # Should be [out, in, kernel]
+    print(f"   Range: [{w.min().item():.6f}, {w.max().item():.6f}]")
+    print(f"   Mean: {w.mean().item():.6f}")
+    print(f"   Std: {w.std().item():.6f}")
 
-print(f"\nfinalProj.weight:")
-print(f"  shape: {fp_weight.shape}")
-print(f"  range: [{fp_weight.min().item():.6f}, {fp_weight.max().item():.6f}]")
-print(f"  mean: {fp_weight.mean().item():.6f}")
-print(f"  First 5 weights of channel 0: {fp_weight[0, :5, 0].tolist()}")
+    # Sample a few values
+    print(f"   w[0,0,0]: {w[0, 0, 0].item():.6f}")
+    print(f"   w[0,:5,0]: {w[0, :5, 0].tolist()}")
+    print(f"   w[79,:5,0]: {w[79, :5, 0].tolist()}")
+else:
+    print(f"Key not found: {key_w}")
 
-print(f"\nfinalProj.bias:")
-print(f"  shape: {fp_bias.shape}")
-print(f"  range: [{fp_bias.min().item():.6f}, {fp_bias.max().item():.6f}]")
-print(f"  mean: {fp_bias.mean().item():.6f}")
-print(f"  First 10: {fp_bias[:10].tolist()}")
+if key_b in state_dict:
+    b = state_dict[key_b]
+    print(f"\n{key_b}:")
+    print(f"   Shape: {b.shape}")
+    print(f"   Range: [{b.min().item():.6f}, {b.max().item():.6f}]")
+    print(f"   Mean: {b.mean().item():.6f}")
+    print(f"   Std: {b.std().item():.6f}")
 
-print("\n✅ Done")
+    # Check if bias is very negative (could explain darkness)
+    print(f"\n   Bias contribution to mel:")
+    print(f"   If applied to all 80 mel bins, mean shift = {b.mean().item():.6f}")
+
+    # Sample some bias values
+    print(f"   b[:10]: {b[:10].tolist()}")
+    print(f"   b[-10:]: {b[-10:].tolist()}")
+else:
+    print(f"Key not found: {key_b}")
+
+print("\n" + "=" * 80)
