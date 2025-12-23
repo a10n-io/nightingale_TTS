@@ -1894,26 +1894,25 @@ public class FlowMatchingDecoder: Module {
         }
         h = finalProj(h)          // [B, T, 80]
 
-        // CRITICAL FIX 1: Brighten mel to match Python output
-        // Swift mel is ~1.5 dB darker than Python, causing mumbled speech
-        // Add 1.5 dB in log space to brighten
-        h = h + 1.5
+        // TODO: ROOT CAUSE INVESTIGATION NEEDED
+        // Current status: Swift mel is ~1.5 dB darker than Python
+        // Need forensic comparison of actual mel values (not inferred from audio)
+        // See: E2E/FORENSIC_INVESTIGATION_PLAN.md
 
-        // CRITICAL FIX 2: Clamp mel to ensure log-scale values stay negative
-        // Positive values indicate decoder overflow/saturation causing static audio
-        // Log-mel spectrograms represent log(magnitude), so must be ≤ 0
-        h = minimum(h, 0.0)
-
+        // For now: Output RAW for forensic comparison
         if debug {
             eval(h)
-            print("  After finalProj+brighten+clamp h.shape=\(h.shape) (expecting [B, T, 80])")
-            print("  After finalProj+brighten+clamp range=[\(h.min().item(Float.self)), \(h.max().item(Float.self))]")
+            print("  [FORENSIC] After finalProj (RAW) h.shape=\(h.shape)")
+            print("  [FORENSIC] After finalProj (RAW) range=[\(h.min().item(Float.self)), \(h.max().item(Float.self))]")
+            print("  [FORENSIC] After finalProj (RAW) mean=\(h.mean().item(Float.self))")
+            print("  [FORENSIC] Expected Python: mean≈-5.81, max=0.00")
         }
         h = h.transposed(0, 2, 1) // [B, T, 80] → [B, 80, T]
         if debug {
             eval(h)
-            print("DEC after finalProj+brighten+clamp: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]")
-            checkSpatial(h, label: "09_finalProj+brighten+clamp")
+            print("DEC after finalProj+correction: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]")
+            print("DEC mean after correction: \(h.mean().item(Float.self))")
+            checkSpatial(h, label: "09_finalProj_corrected")
         }
 
         // Python multiplies by mask after final_proj: return output * mask
