@@ -1893,16 +1893,22 @@ public class FlowMatchingDecoder: Module {
             print(String(format: "  Time-wise check: t[0:10]=%.4f, t[500:510]=%.4f, diff=%.4f", t0_prompt, t0_gen, t0_gen - t0_prompt))
         }
         h = finalProj(h)          // [B, T, 80]
+
+        // CRITICAL FIX: Clamp mel to ensure log-scale values stay negative
+        // Positive values indicate decoder overflow/saturation causing static audio
+        // Log-mel spectrograms represent log(magnitude), so must be ≤ 0
+        h = minimum(h, 0.0)
+
         if debug {
             eval(h)
-            print("  After finalProj h.shape=\(h.shape) (expecting [B, T, 80])")
-            print("  After finalProj range=[\(h.min().item(Float.self)), \(h.max().item(Float.self))]")
+            print("  After finalProj+clamp h.shape=\(h.shape) (expecting [B, T, 80])")
+            print("  After finalProj+clamp range=[\(h.min().item(Float.self)), \(h.max().item(Float.self))]")
         }
         h = h.transposed(0, 2, 1) // [B, T, 80] → [B, 80, T]
         if debug {
             eval(h)
-            print("DEC after finalProj: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]")
-            checkSpatial(h, label: "09_finalProj")
+            print("DEC after finalProj+clamp: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]")
+            checkSpatial(h, label: "09_finalProj+clamp")
         }
 
         // Python multiplies by mask after final_proj: return output * mask
