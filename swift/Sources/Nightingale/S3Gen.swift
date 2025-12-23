@@ -598,9 +598,15 @@ public class UpsampleEncoder: Module {
         self.embedLinear = FixedLinear(inputDim, outputDim, name: "UpsampleEncoder.embedLinear")
         print("🔧  [1/10] ✓ embedLinear created"); fflush(stdout)
 
-        print("🔧  [2/10] Creating embedNorm(dim=\(outputDim))..."); fflush(stdout)
+        print("🔧  [2/10] Creating embedNorm(dim=\(outputDim)) with identity init..."); fflush(stdout)
         self.embedNorm = LayerNorm(dimensions: outputDim, eps: 1e-5)
-        print("🔧  [2/10] ✓ embedNorm created"); fflush(stdout)
+        // CRITICAL FIX: Python's Conv1dSubsampling2 does NOT have a norm layer
+        // Initialize as identity transform (gamma=1, beta=0) to avoid signal suppression
+        self.embedNorm.update(parameters: ModuleParameters.unflattened([
+            "weight": MLXArray.ones([outputDim]),
+            "bias": MLXArray.zeros([outputDim])
+        ]))
+        print("🔧  [2/10] ✓ embedNorm created with identity init (gamma=1, beta=0)"); fflush(stdout)
 
         print("🔧  [3/10] Creating posEnc(dModel=\(outputDim))..."); fflush(stdout)
         self.posEnc = EspnetRelPositionalEncoding(dModel: outputDim)
@@ -635,9 +641,15 @@ public class UpsampleEncoder: Module {
         self.upEmbedLinear = FixedLinear(outputDim, outputDim, name: "UpsampleEncoder.upEmbedLinear")
         print("🔧  [7/10] ✓ upEmbedLinear created"); fflush(stdout)
 
-        print("🔧  [8/10] Creating upEmbedNorm(dim=\(outputDim))..."); fflush(stdout)
+        print("🔧  [8/10] Creating upEmbedNorm(dim=\(outputDim)) with identity init..."); fflush(stdout)
         self.upEmbedNorm = LayerNorm(dimensions: outputDim, eps: 1e-5)
-        print("🔧  [8/10] ✓ upEmbedNorm created"); fflush(stdout)
+        // CRITICAL FIX: Python's Conv1dSubsampling2 does NOT have a norm layer
+        // Initialize as identity transform (gamma=1, beta=0) to avoid signal suppression
+        self.upEmbedNorm.update(parameters: ModuleParameters.unflattened([
+            "weight": MLXArray.ones([outputDim]),
+            "bias": MLXArray.zeros([outputDim])
+        ]))
+        print("🔧  [8/10] ✓ upEmbedNorm created with identity init (gamma=1, beta=0)"); fflush(stdout)
 
         print("🔧  [9/10] Creating upPosEnc(dModel=\(outputDim))..."); fflush(stdout)
         self.upPosEnc = EspnetRelPositionalEncoding(dModel: outputDim)
@@ -936,17 +948,29 @@ public class UpsampleEncoder: Module {
         }
 
         // 2. Load embed.norm weights
+        // CRITICAL: Python's Conv1dSubsampling2 does NOT have a norm layer
+        // If weights exist in safetensors with tiny values (<0.1), they're invalid - keep identity init instead
         if let w = weights["\(prefix).embed.norm.weight"] {
             eval(w)
-            print("  📊 embed.norm.weight FROM FILE: shape=\(w.shape), range=[\(w.min().item(Float.self)), \(w.max().item(Float.self))], mean=\(w.mean().item(Float.self))")
-            embedNorm.update(parameters: ModuleParameters.unflattened(["weight": w]))
-            print("  ✅ Loaded embed.norm.weight")
+            let avgWeight = abs(w).mean().item(Float.self)
+            print("  📊 embed.norm.weight FROM FILE: shape=\(w.shape), range=[\(w.min().item(Float.self)), \(w.max().item(Float.self))], mean=\(avgWeight)")
+            if avgWeight >= 0.1 {
+                embedNorm.update(parameters: ModuleParameters.unflattened(["weight": w]))
+                print("  ✅ Loaded embed.norm.weight")
+            } else {
+                print("  ⚠️  SKIPPED embed.norm.weight (too small, mean=\(avgWeight) < 0.1) - keeping identity init")
+            }
         }
         if let b = weights["\(prefix).embed.norm.bias"] {
             eval(b)
-            print("  📊 embed.norm.bias FROM FILE: shape=\(b.shape), range=[\(b.min().item(Float.self)), \(b.max().item(Float.self))], mean=\(b.mean().item(Float.self))")
-            embedNorm.update(parameters: ModuleParameters.unflattened(["bias": b]))
-            print("  ✅ Loaded embed.norm.bias")
+            let avgBias = abs(b).mean().item(Float.self)
+            print("  📊 embed.norm.bias FROM FILE: shape=\(b.shape), range=[\(b.min().item(Float.self)), \(b.max().item(Float.self))], mean=\(avgBias)")
+            if avgBias >= 0.1 || avgBias < 0.01 {  // Accept near-zero bias
+                embedNorm.update(parameters: ModuleParameters.unflattened(["bias": b]))
+                print("  ✅ Loaded embed.norm.bias")
+            } else {
+                print("  ⚠️  SKIPPED embed.norm.bias - keeping identity init")
+            }
         }
 
         // 3. Load pos_enc.pe
@@ -993,13 +1017,29 @@ public class UpsampleEncoder: Module {
         if let w = weights["\(prefix).up_embed.linear.weight"] {
             print("  📊 up_embed.linear.weight FROM FILE: \(w.shape) - will be loaded via ChatterboxEngine.update()")
         }
+        // CRITICAL: Python's Conv1dSubsampling2 does NOT have a norm layer
+        // If weights exist in safetensors with tiny values (<0.1), they're invalid - keep identity init instead
         if let w = weights["\(prefix).up_embed.norm.weight"] {
-            upEmbedNorm.update(parameters: ModuleParameters.unflattened(["weight": w]))
-            print("  ✅ Loaded up_embed.norm.weight")
+            eval(w)
+            let avgWeight = abs(w).mean().item(Float.self)
+            print("  📊 up_embed.norm.weight FROM FILE: shape=\(w.shape), range=[\(w.min().item(Float.self)), \(w.max().item(Float.self))], mean=\(avgWeight)")
+            if avgWeight >= 0.1 {
+                upEmbedNorm.update(parameters: ModuleParameters.unflattened(["weight": w]))
+                print("  ✅ Loaded up_embed.norm.weight")
+            } else {
+                print("  ⚠️  SKIPPED up_embed.norm.weight (too small, mean=\(avgWeight) < 0.1) - keeping identity init")
+            }
         }
         if let b = weights["\(prefix).up_embed.norm.bias"] {
-            upEmbedNorm.update(parameters: ModuleParameters.unflattened(["bias": b]))
-            print("  ✅ Loaded up_embed.norm.bias")
+            eval(b)
+            let avgBias = abs(b).mean().item(Float.self)
+            print("  📊 up_embed.norm.bias FROM FILE: shape=\(b.shape), range=[\(b.min().item(Float.self)), \(b.max().item(Float.self))], mean=\(avgBias)")
+            if avgBias >= 0.1 || avgBias < 0.01 {  // Accept near-zero bias
+                upEmbedNorm.update(parameters: ModuleParameters.unflattened(["bias": b]))
+                print("  ✅ Loaded up_embed.norm.bias")
+            } else {
+                print("  ⚠️  SKIPPED up_embed.norm.bias - keeping identity init")
+            }
         }
         if let pe = weights["\(prefix).up_embed.pos_enc.pe"] {
             upPosEnc.pe = pe
@@ -2190,11 +2230,21 @@ public class Mel2Wav: Module {
         }
 
         // F0 Prediction
-        let f0 = f0Predictor(x) // [B, T]
+        var f0 = f0Predictor(x) // [B, T]
         if Mel2Wav.debugEnabled {
             eval(f0)
-            print("VOC F0: shape=\(f0.shape), range=[\(f0.min().item(Float.self)), \(f0.max().item(Float.self))]")
-            print("VOC F0 first 20: \(Array(f0[0, 0..<20].asArray(Float.self)))")
+            print("VOC F0 (normalized): shape=\(f0.shape), range=[\(f0.min().item(Float.self)), \(f0.max().item(Float.self))]")
+        }
+
+        // CRITICAL FIX: Scale F0 from normalized [0, 1] to Hz [0, samplingRate]
+        // The f0Predictor outputs normalized frequency (0.0 to 1.0, where 1.0 = Nyquist or samplingRate/2)
+        // However, SineGen expects frequency in Hertz.
+        f0 = f0 * 24000.0
+
+        if Mel2Wav.debugEnabled {
+            eval(f0)
+            print("VOC F0 (Hz): range=[\(f0.min().item(Float.self)), \(f0.max().item(Float.self))]")
+            print("VOC F0 first 20 (Hz): \(Array(f0[0, 0..<20].asArray(Float.self)))")
         }
 
         // Upsample F0
