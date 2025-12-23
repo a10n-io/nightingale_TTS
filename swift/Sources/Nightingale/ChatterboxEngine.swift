@@ -1111,8 +1111,8 @@ public actor ChatterboxEngine {
         let speechTokenArray = MLXArray(validTokens.map { Int32($0) }).expandedDimensions(axis: 0)
         let audio = s3gen.generate(
             tokens: speechTokenArray,
-            speakerEmb: s3Soul,
-            speechEmbMatrix: t3.speechEmb.weight,
+            speakerEmb: t3Soul,           // [1, 256] speaker embedding for decoder finalize
+            speechEmbMatrix: s3Soul,       // [1, 192] speech embedding matrix for spkEmbedAffine
             promptToken: promptToken,
             promptFeat: promptFeat
         )
@@ -1427,8 +1427,8 @@ public actor ChatterboxEngine {
 
         let audio = s3gen.generate(
             tokens: speechTokenArray,
-            speakerEmb: s3Soul,
-            speechEmbMatrix: t3.speechEmb.weight,
+            speakerEmb: t3Soul,           // [1, 256] speaker embedding for decoder finalize
+            speechEmbMatrix: s3Soul,       // [1, 192] speech embedding matrix for spkEmbedAffine
             promptToken: promptToken,
             promptFeat: promptFeat
         )
@@ -1496,7 +1496,7 @@ public actor ChatterboxEngine {
         guard isLoaded else { throw ChatterboxError.modelNotLoaded }
         guard isVoiceLoaded else { throw ChatterboxError.voiceNotLoaded }
         guard let s3gen = s3gen, let t3 = t3,
-              let s3Soul = s3Soul, let promptToken = promptToken, let promptFeat = promptFeat else {
+              let t3Soul = t3Soul, let s3Soul = s3Soul, let promptToken = promptToken, let promptFeat = promptFeat else {
             throw ChatterboxError.modelNotLoaded
         }
 
@@ -1523,8 +1523,8 @@ public actor ChatterboxEngine {
 
         let audio = s3gen.generate(
             tokens: tokensArray,
-            speakerEmb: s3Soul,
-            speechEmbMatrix: t3.speechEmb.weight,
+            speakerEmb: t3Soul,           // [1, 256] speaker embedding for decoder finalize
+            speechEmbMatrix: s3Soul,       // [1, 192] speech embedding matrix for spkEmbedAffine
             promptToken: promptToken,
             promptFeat: promptFeat
         )
@@ -1547,7 +1547,7 @@ public actor ChatterboxEngine {
         s3Soul: MLXArray
     ) async throws -> [Float] {
         guard isLoaded else { throw ChatterboxError.modelNotLoaded }
-        guard let s3gen = s3gen, let t3 = t3 else {
+        guard let s3gen = s3gen, let t3 = t3, let t3Soul = t3Soul else {
             throw ChatterboxError.modelNotLoaded
         }
 
@@ -1577,8 +1577,8 @@ public actor ChatterboxEngine {
         // Run S3Gen
         let audio = s3gen.generate(
             tokens: validTokenArray,
-            speakerEmb: s3Soul,
-            speechEmbMatrix: t3.speechEmb.weight,
+            speakerEmb: t3Soul,           // [1, 256] speaker embedding for decoder finalize
+            speechEmbMatrix: s3Soul,       // [1, 192] speech embedding matrix for spkEmbedAffine
             promptToken: promptTokens,
             promptFeat: promptFeat
         )
