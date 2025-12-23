@@ -457,26 +457,13 @@ public class S3ConformerFeedForward: Module {
 
     /// Load weights for feed forward
     public func load(weights: [String: MLXArray], prefix: String) {
-        // PyTorch weights are [out_features, in_features]
-        // FixedLinear expects [in_features, out_features] for matmul(x, weight)
-        // Need to transpose!
-        print("🔧 FF.load: Loading \(prefix)")
-        let w1Key = "\(prefix).w_1.weight"
-        print("🔧   Looking for key: '\(w1Key)'")
-        let matchingKeys = weights.keys.filter { $0.contains("feed_forward") && $0.contains("w_1") }
-        if matchingKeys.count > 0 {
-            print("🔧   Matching keys found: \(matchingKeys.prefix(5))")
-        } else {
-            print("🔧   ❌ No matching keys found!")
-        }
-        // NOTE: w_1 and w_2 weights are loaded later via ChatterboxEngine.update()
-        // DO NOT transpose weights here to avoid double-transpose bug
-        // Weights will be transposed once in remapS3Keys() and applied via update()
-        if let w = weights[w1Key] {
-            print("🔧   w_1 FROM FILE: \(w.shape) - will be loaded via ChatterboxEngine.update()")
+        // NOTE: w_1 and w_2 weights are loaded via ChatterboxEngine.update()
+        // DO NOT load them here to avoid double-transpose bug
+        if let w = weights["\(prefix).w_1.weight"] {
+            print("  Found \(prefix).w_1.weight: \(w.shape) - will be loaded via ChatterboxEngine.update()")
         }
         if let w = weights["\(prefix).w_2.weight"] {
-            print("🔧   w_2 FROM FILE: \(w.shape) - will be loaded via ChatterboxEngine.update()")
+            print("  Found \(prefix).w_2.weight: \(w.shape) - will be loaded via ChatterboxEngine.update()")
         }
     }
 }
@@ -940,37 +927,27 @@ public class UpsampleEncoder: Module {
     public func load(weights: [String: MLXArray], prefix: String = "encoder") {
         print("UpsampleEncoder: Loading weights with prefix '\(prefix)'")
 
-        // NOTE: embed.linear weights are loaded later via ChatterboxEngine.update()
-        // DO NOT transpose weights here to avoid double-transpose bug
-        // Weights will be transposed once in remapS3Keys() and applied via update()
-        if let w = weights["\(prefix).embed.linear.weight"] {
-            print("  📊 embed.linear.weight FROM FILE: \(w.shape) - will be loaded via ChatterboxEngine.update()")
+        // NOTE: embedLinear weights are loaded via ChatterboxEngine.update()
+        // DO NOT load them here to avoid double-transpose bug
+        if let w = weights["\(prefix).embedLinear.weight"] {
+            print("  Found \(prefix).embedLinear.weight: \(w.shape) - will be loaded via ChatterboxEngine.update()")
         }
 
-        // 2. Load embed.norm weights
-        // CRITICAL: Python's Conv1dSubsampling2 does NOT have a norm layer
-        // If weights exist in safetensors with tiny values (<0.1), they're invalid - keep identity init instead
-        if let w = weights["\(prefix).embed.norm.weight"] {
+        // 2. Load embedNorm weights
+        // Load LayerNorm weights if they exist (Python model has these)
+        if let w = weights["\(prefix).embedNorm.weight"] {
             eval(w)
             let avgWeight = abs(w).mean().item(Float.self)
-            print("  📊 embed.norm.weight FROM FILE: shape=\(w.shape), range=[\(w.min().item(Float.self)), \(w.max().item(Float.self))], mean=\(avgWeight)")
-            if avgWeight >= 0.1 {
-                embedNorm.update(parameters: ModuleParameters.unflattened(["weight": w]))
-                print("  ✅ Loaded embed.norm.weight")
-            } else {
-                print("  ⚠️  SKIPPED embed.norm.weight (too small, mean=\(avgWeight) < 0.1) - keeping identity init")
-            }
+            print("  📊 embedNorm.weight FROM FILE: shape=\(w.shape), range=[\(w.min().item(Float.self)), \(w.max().item(Float.self))], mean=\(avgWeight)")
+            embedNorm.update(parameters: ModuleParameters.unflattened(["weight": w]))
+            print("  ✅ Loaded embedNorm.weight")
         }
-        if let b = weights["\(prefix).embed.norm.bias"] {
+        if let b = weights["\(prefix).embedNorm.bias"] {
             eval(b)
             let avgBias = abs(b).mean().item(Float.self)
-            print("  📊 embed.norm.bias FROM FILE: shape=\(b.shape), range=[\(b.min().item(Float.self)), \(b.max().item(Float.self))], mean=\(avgBias)")
-            if avgBias >= 0.1 || avgBias < 0.01 {  // Accept near-zero bias
-                embedNorm.update(parameters: ModuleParameters.unflattened(["bias": b]))
-                print("  ✅ Loaded embed.norm.bias")
-            } else {
-                print("  ⚠️  SKIPPED embed.norm.bias - keeping identity init")
-            }
+            print("  📊 embedNorm.bias FROM FILE: shape=\(b.shape), range=[\(b.min().item(Float.self)), \(b.max().item(Float.self))], mean=\(avgBias)")
+            embedNorm.update(parameters: ModuleParameters.unflattened(["bias": b]))
+            print("  ✅ Loaded embedNorm.bias")
         }
 
         // 3. Load pos_enc.pe
@@ -1011,35 +988,25 @@ public class UpsampleEncoder: Module {
             print("  Found up_layer.conv.weight: \(w.shape) - will be loaded via ChatterboxEngine.update()")
         }
 
-        // NOTE: up_embed.linear weights are loaded later via ChatterboxEngine.update()
-        // DO NOT transpose weights here to avoid double-transpose bug
-        // Weights will be transposed once in remapS3Keys() and applied via update()
-        if let w = weights["\(prefix).up_embed.linear.weight"] {
-            print("  📊 up_embed.linear.weight FROM FILE: \(w.shape) - will be loaded via ChatterboxEngine.update()")
+        // NOTE: upEmbedLinear weights are loaded via ChatterboxEngine.update()
+        // DO NOT load them here to avoid double-transpose bug
+        if let w = weights["\(prefix).upEmbedLinear.weight"] {
+            print("  Found \(prefix).upEmbedLinear.weight: \(w.shape) - will be loaded via ChatterboxEngine.update()")
         }
-        // CRITICAL: Python's Conv1dSubsampling2 does NOT have a norm layer
-        // If weights exist in safetensors with tiny values (<0.1), they're invalid - keep identity init instead
-        if let w = weights["\(prefix).up_embed.norm.weight"] {
+        // Load upEmbedNorm weights if they exist (Python model has these)
+        if let w = weights["\(prefix).upEmbedNorm.weight"] {
             eval(w)
             let avgWeight = abs(w).mean().item(Float.self)
-            print("  📊 up_embed.norm.weight FROM FILE: shape=\(w.shape), range=[\(w.min().item(Float.self)), \(w.max().item(Float.self))], mean=\(avgWeight)")
-            if avgWeight >= 0.1 {
-                upEmbedNorm.update(parameters: ModuleParameters.unflattened(["weight": w]))
-                print("  ✅ Loaded up_embed.norm.weight")
-            } else {
-                print("  ⚠️  SKIPPED up_embed.norm.weight (too small, mean=\(avgWeight) < 0.1) - keeping identity init")
-            }
+            print("  📊 upEmbedNorm.weight FROM FILE: shape=\(w.shape), range=[\(w.min().item(Float.self)), \(w.max().item(Float.self))], mean=\(avgWeight)")
+            upEmbedNorm.update(parameters: ModuleParameters.unflattened(["weight": w]))
+            print("  ✅ Loaded upEmbedNorm.weight")
         }
-        if let b = weights["\(prefix).up_embed.norm.bias"] {
+        if let b = weights["\(prefix).upEmbedNorm.bias"] {
             eval(b)
             let avgBias = abs(b).mean().item(Float.self)
-            print("  📊 up_embed.norm.bias FROM FILE: shape=\(b.shape), range=[\(b.min().item(Float.self)), \(b.max().item(Float.self))], mean=\(avgBias)")
-            if avgBias >= 0.1 || avgBias < 0.01 {  // Accept near-zero bias
-                upEmbedNorm.update(parameters: ModuleParameters.unflattened(["bias": b]))
-                print("  ✅ Loaded up_embed.norm.bias")
-            } else {
-                print("  ⚠️  SKIPPED up_embed.norm.bias - keeping identity init")
-            }
+            print("  📊 upEmbedNorm.bias FROM FILE: shape=\(b.shape), range=[\(b.min().item(Float.self)), \(b.max().item(Float.self))], mean=\(avgBias)")
+            upEmbedNorm.update(parameters: ModuleParameters.unflattened(["bias": b]))
+            print("  ✅ Loaded upEmbedNorm.bias")
         }
         if let pe = weights["\(prefix).up_embed.pos_enc.pe"] {
             upPosEnc.pe = pe
@@ -1892,6 +1859,17 @@ public class FlowMatchingDecoder: Module {
             let t0_gen = t0_gen_slice.mean().item(Float.self)
             print(String(format: "  Time-wise check: t[0:10]=%.4f, t[500:510]=%.4f, diff=%.4f", t0_prompt, t0_gen, t0_gen - t0_prompt))
         }
+
+        // FORENSIC: Save ODE output before finalProj
+        if debug {
+            let forensicDir = "../test_audio/forensic"
+            let odeOutputPath = forensicDir + "/swift_ode_output.safetensors"
+            eval(h)
+            try? MLX.save(arrays: ["ode_output": h], url: URL(fileURLWithPath: odeOutputPath))
+            print("  [FORENSIC] Saved ODE output (before finalProj): \(odeOutputPath)")
+            print("  [FORENSIC] ODE output shape: \(h.shape), range: [\(h.min().item(Float.self)), \(h.max().item(Float.self))], mean: \(h.mean().item(Float.self))")
+        }
+
         h = finalProj(h)          // [B, T, 80]
 
         // TODO: ROOT CAUSE INVESTIGATION NEEDED
@@ -1906,6 +1884,17 @@ public class FlowMatchingDecoder: Module {
             print("  [FORENSIC] After finalProj (RAW) range=[\(h.min().item(Float.self)), \(h.max().item(Float.self))]")
             print("  [FORENSIC] After finalProj (RAW) mean=\(h.mean().item(Float.self))")
             print("  [FORENSIC] Expected Python: mean≈-5.81, max=0.00")
+
+            // TEMPORARY: Save mel for forensic comparison
+            let forensicDir = "../test_audio/forensic"
+            try? FileManager.default.createDirectory(atPath: forensicDir, withIntermediateDirectories: true)
+            let forensicPath = forensicDir + "/swift_mel_raw.safetensors"
+
+            // h is [B, T, 80], transpose to [B, 80, T] for saving
+            let hTransposed = h.transposed(0, 2, 1)
+            eval(hTransposed)
+            try? MLX.save(arrays: ["mel_gen": hTransposed], url: URL(fileURLWithPath: forensicPath))
+            print("  [FORENSIC] Saved mel to: \(forensicPath)")
         }
         h = h.transposed(0, 2, 1) // [B, T, 80] → [B, 80, T]
         if debug {
@@ -2658,14 +2647,15 @@ public class S3Gen: Module {
                 continue  // Not an encoder key
             }
 
-            // CRITICAL: Remap .embed.out.0. → .embed.linear. and .embed.out.1. → .embed.norm.
+            // CRITICAL: Remap .embed.out.0. → .embedLinear. and .embed.out.1. → .embedNorm.
             // Python's Sequential([Linear, LayerNorm]) uses indices 0 and 1
-            remappedKey = remappedKey.replacingOccurrences(of: ".embed.out.0.", with: ".embed.linear.")
-            remappedKey = remappedKey.replacingOccurrences(of: ".embed.out.1.", with: ".embed.norm.")
+            // MUST use camelCase to match Swift property names!
+            remappedKey = remappedKey.replacingOccurrences(of: ".embed.out.0.", with: ".embedLinear.")
+            remappedKey = remappedKey.replacingOccurrences(of: ".embed.out.1.", with: ".embedNorm.")
 
             // Same for up_embed
-            remappedKey = remappedKey.replacingOccurrences(of: ".up_embed.out.0.", with: ".up_embed.linear.")
-            remappedKey = remappedKey.replacingOccurrences(of: ".up_embed.out.1.", with: ".up_embed.norm.")
+            remappedKey = remappedKey.replacingOccurrences(of: ".up_embed.out.0.", with: ".upEmbedLinear.")
+            remappedKey = remappedKey.replacingOccurrences(of: ".up_embed.out.1.", with: ".upEmbedNorm.")
 
             encoderWeights[remappedKey] = value
         }
@@ -3180,6 +3170,16 @@ public class S3Gen: Module {
         print("DEBUG S3Gen: encoderProj returned, mu.shape = \(mu.shape)"); fflush(stdout)
         eval(mu)
         print("TRACE 2: encoder_out (mu) shape=\(mu.shape), range=[\(mu.min().item(Float.self)), \(mu.max().item(Float.self))], mean=\(mu.mean().item(Float.self))"); fflush(stdout)
+
+        // FORENSIC: Save encoder output (mu after projection) - ALWAYS SAVE
+        do {
+            let forensicDir = "../test_audio/forensic"
+            try? FileManager.default.createDirectory(atPath: forensicDir, withIntermediateDirectories: true)
+            let encoderOutputPath = forensicDir + "/swift_encoder_output.safetensors"
+            try? MLX.save(arrays: ["encoder_output": mu], url: URL(fileURLWithPath: encoderOutputPath))
+            print("  [FORENSIC] Saved encoder output (mu): \(encoderOutputPath)")
+            print("  [FORENSIC] Encoder shape: \(mu.shape), range: [\(mu.min().item(Float.self)), \(mu.max().item(Float.self))], mean: \(mu.mean().item(Float.self))")
+        }
 
         // DEBUG: Check mu for prompt vs generated regions
         let muPromptRegion = mu[0, 0..<500, 0...]
