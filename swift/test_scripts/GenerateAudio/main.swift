@@ -57,8 +57,8 @@ do {
     print("✅ Models loaded successfully")
 
     // Load voice
-    print("\nLoading voice: samantha")
-    try engine.loadVoice("samantha", voicesURL: voicesDir)
+    print("\nLoading voice: sujano")
+    try engine.loadVoice("sujano", voicesURL: voicesDir)
     print("✅ Voice loaded successfully")
 
     // Test text - MUST MATCH Python test for verification

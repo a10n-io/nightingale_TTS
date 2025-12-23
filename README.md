@@ -13,15 +13,7 @@ Chatterbox is a PyTorch-based text-to-speech system. This project aims to:
 - Optimize for on-device inference on iOS devices
 - Enable fully offline, privacy-preserving speech synthesis
 
-## Status
-
-| Component | Python | Swift |
-|-----------|--------|-------|
-| T3 Model (text → tokens) | ✅ Working | ✅ Working |
-| S3Gen Encoder | ✅ Working | ✅ Working |
-| S3Gen Decoder (ODE) | ✅ Working | ❌ Bug |
-| Mel2Wav Vocoder | ✅ Working | ⚠️ Blocked |
-| Voice Baking | ✅ Working | N/A (uses NPY) |
+ |
 
 **Python:** Fully functional end-to-end TTS pipeline.
 **Swift:** T3 works, S3Gen decoder has MLX lazy evaluation bug (see [docs/VERIFICATION_STATUS.md](docs/VERIFICATION_STATUS.md)).

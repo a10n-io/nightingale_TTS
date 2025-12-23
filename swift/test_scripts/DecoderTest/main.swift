@@ -1,26 +1,61 @@
 import Foundation
+
+print("[DEBUG] Starting...")
+
 import MLX
+
+print("[DEBUG] MLX imported")
+
 import MLXNN
+
+print("[DEBUG] MLXNN imported")
+
 import Nightingale
+
+print("[DEBUG] Nightingale imported")
 
 print("================================================================================")
 print("DECODER COMPARISON TEST: Python vs Swift")
 print("================================================================================")
 
-// Load Python decoder trace
+// Load Python decoder trace from binary files (most reliable)
 let PROJECT_ROOT = "/Users/a10n/Projects/nightingale_TTS"
-let tracePath = URL(fileURLWithPath: "\(PROJECT_ROOT)/test_audio/python_decoder_trace.safetensors")
-print("\nLoading Python trace from: \(tracePath.path)")
+let binDir = URL(fileURLWithPath: "\(PROJECT_ROOT)/test_audio/decoder_trace_bin")
+print("\nLoading Python trace from binary files: \(binDir.path)")
 
-let trace = try! MLX.loadArrays(url: tracePath)
+func loadBinary(_ name: String) -> MLXArray {
+    print("  Loading \(name)...")
 
-let noise = trace["noise"]!
-let mu = trace["mu"]!
-let spk_cond = trace["spk_cond"]!
-let conds = trace["conds"]!
-let mask = trace["mask"]!
-let t = trace["t"]!
-let python_output = trace["decoder_output"]!
+    // Read shape
+    let shapePath = binDir.appendingPathComponent("\(name).shape")
+    let shapeStr = try! String(contentsOf: shapePath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+    let shape = shapeStr.split(separator: " ").map { Int($0)! }
+    print("    shape: \(shape)")
+
+    // Read binary data
+    let binPath = binDir.appendingPathComponent("\(name).bin")
+    let data = try! Data(contentsOf: binPath)
+
+    // Convert to float array
+    let floats = data.withUnsafeBytes {
+        Array($0.bindMemory(to: Float.self))
+    }
+
+    // Create MLXArray
+    let arr = MLXArray(floats).reshaped(shape)
+    print("    ✅ loaded \(floats.count) floats")
+    return arr
+}
+
+print("Loading arrays...")
+let noise = loadBinary("noise")
+let mu = loadBinary("mu")
+let spk_cond = loadBinary("spk_cond")
+let conds = loadBinary("conds")
+let mask = loadBinary("mask")
+let t = loadBinary("t")
+let python_output = loadBinary("decoder_output")
+print("✅ Loaded 7 arrays from binary files")
 
 eval(noise, mu, spk_cond, conds, mask, t, python_output)
 

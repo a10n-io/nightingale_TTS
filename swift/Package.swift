@@ -64,6 +64,14 @@ let package = Package(
             name: "TraceVocoderLayers",
             targets: ["TraceVocoderLayers"]
         ),
+        .executable(
+            name: "TraceFusionLayer0",
+            targets: ["TraceFusionLayer0"]
+        ),
+        .executable(
+            name: "SaveSTFTInput",
+            targets: ["SaveSTFTInput"]
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.21.0"),
@@ -183,6 +191,18 @@ let package = Package(
             dependencies: ["Nightingale"],
             path: "test_scripts",
             sources: ["TraceVocoderLayers.swift"]
+        ),
+        .executableTarget(
+            name: "TraceFusionLayer0",
+            dependencies: ["Nightingale"],
+            path: "test_scripts",
+            sources: ["TraceFusionLayer0.swift"]
+        ),
+        .executableTarget(
+            name: "SaveSTFTInput",
+            dependencies: ["Nightingale"],
+            path: "test_scripts",
+            sources: ["SaveSTFTInput.swift"]
         ),
         .executableTarget(
             name: "CheckEmbedLinearWeights",

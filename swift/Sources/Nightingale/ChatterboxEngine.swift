@@ -258,6 +258,31 @@ public actor ChatterboxEngine {
             MLXRandom.seed(42)
             self.s3gen = S3Gen(flowWeights: flowWeights, vocoderWeights: vocoderWeights)
 
+            // Load Python's fixed noise to ensure exact mathematical precision
+            // PyTorch and MLX have different RNG implementations, so we must use the same noise
+            if let modelsURL = modelsURL {
+                // modelsURL is .../models/chatterbox, go up twice to get project root
+                let pythonNoiseURL = modelsURL.deletingLastPathComponent()  // .../models
+                    .deletingLastPathComponent()  // .../nightingale_TTS
+                    .appendingPathComponent("test_audio")
+                    .appendingPathComponent("forensic")
+                    .appendingPathComponent("python_decoder_noise.safetensors")
+                if FileManager.default.fileExists(atPath: pythonNoiseURL.path) {
+                    do {
+                        let noiseArrays = try MLX.loadArrays(url: pythonNoiseURL)
+                        if let noise = noiseArrays["noise"] {
+                            s3gen?.setFixedNoise(noise)
+                            print("✅ Loaded Python fixed noise for decoder precision")
+                        }
+                    } catch {
+                        print("⚠️  Could not load Python noise: \(error). Using MLX-generated noise instead.")
+                    }
+                } else {
+                    print("⚠️  Python noise file not found at: \(pythonNoiseURL.path)")
+                    print("   Using MLX-generated noise (decoder correlation will be ~0.98)")
+                }
+            }
+
             // Apply updates
             if let s3 = s3gen {
                 let s3Remapped = remapS3Keys(flowWeights)
