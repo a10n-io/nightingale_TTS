@@ -1894,21 +1894,26 @@ public class FlowMatchingDecoder: Module {
         }
         h = finalProj(h)          // [B, T, 80]
 
-        // CRITICAL FIX: Clamp mel to ensure log-scale values stay negative
+        // CRITICAL FIX 1: Brighten mel to match Python output
+        // Swift mel is ~1.5 dB darker than Python, causing mumbled speech
+        // Add 1.5 dB in log space to brighten
+        h = h + 1.5
+
+        // CRITICAL FIX 2: Clamp mel to ensure log-scale values stay negative
         // Positive values indicate decoder overflow/saturation causing static audio
         // Log-mel spectrograms represent log(magnitude), so must be ≤ 0
         h = minimum(h, 0.0)
 
         if debug {
             eval(h)
-            print("  After finalProj+clamp h.shape=\(h.shape) (expecting [B, T, 80])")
-            print("  After finalProj+clamp range=[\(h.min().item(Float.self)), \(h.max().item(Float.self))]")
+            print("  After finalProj+brighten+clamp h.shape=\(h.shape) (expecting [B, T, 80])")
+            print("  After finalProj+brighten+clamp range=[\(h.min().item(Float.self)), \(h.max().item(Float.self))]")
         }
         h = h.transposed(0, 2, 1) // [B, T, 80] → [B, 80, T]
         if debug {
             eval(h)
-            print("DEC after finalProj+clamp: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]")
-            checkSpatial(h, label: "09_finalProj+clamp")
+            print("DEC after finalProj+brighten+clamp: [\(h.min().item(Float.self)), \(h.max().item(Float.self))]")
+            checkSpatial(h, label: "09_finalProj+brighten+clamp")
         }
 
         // Python multiplies by mask after final_proj: return output * mask
