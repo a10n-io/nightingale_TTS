@@ -280,7 +280,7 @@ You can modify the test inputs by editing the Python scripts:
 verify_e2e_steps1_5(
     test_text="Your custom text here",
     voice_path="baked_voices/samantha_full",
-    s3gen_weights_path="../chatterbox claude/ChatterboxApp/AppAssets/models/chatterbox/s3gen_fp16.safetensors",
+    s3gen_weights_path="../models/chatterbox/s3gen_fp16.safetensors",
     output_dir="verification_outputs/e2e_steps1_5"
 )
 ```

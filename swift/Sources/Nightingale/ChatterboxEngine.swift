@@ -1386,12 +1386,6 @@ public actor ChatterboxEngine {
         )
         print("DEBUG: T3 generate returned \(speechTokens.count) speech tokens"); fflush(stdout)
 
-        // 🔬 TOKEN DIAGNOSTIC: Save tokens to file for comparison with Python
-        let tokensString = speechTokens.map { String($0) }.joined(separator: ", ")
-        let tokensURL = URL(fileURLWithPath: "/Users/a10n/Projects/chatterbox claude/swift_generated_tokens.txt")
-        try? tokensString.write(to: tokensURL, atomically: true, encoding: .utf8)
-        print("💾 Saved tokens to: swift_generated_tokens.txt"); fflush(stdout)
-
         // DIAGNOSTIC: Print first 20 tokens to check range
         let first20 = Array(speechTokens.prefix(20))
         print("🔍 First 20 speech tokens: \(first20)"); fflush(stdout)

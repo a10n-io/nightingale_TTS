@@ -128,7 +128,7 @@ mask_2d = torch.triu(torch.full((seq_len, seq_len), float('-inf')), diagonal=1)
 mask_2d[:cond_len, :] = 0.0
 ```
 
-**Reference Source:** Found by examining [verify_v2_step3_transformer.py](../../chatterbox%20claude/verify_v2_step3_transformer.py) which showed the correct transformer forward pass implementation.
+**Reference Source:** Found by examining the Python reference implementation which showed the correct transformer forward pass implementation.
 
 ---
 
