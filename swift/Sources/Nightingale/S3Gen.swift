@@ -2229,21 +2229,11 @@ public class Mel2Wav: Module {
         }
 
         // F0 Prediction
-        var f0 = f0Predictor(x) // [B, T]
+        let f0 = f0Predictor(x) // [B, T]
         if Mel2Wav.debugEnabled {
             eval(f0)
-            print("VOC F0 (normalized): shape=\(f0.shape), range=[\(f0.min().item(Float.self)), \(f0.max().item(Float.self))]")
-        }
-
-        // CRITICAL FIX: Scale F0 from normalized [0, 1] to Hz [0, samplingRate]
-        // The f0Predictor outputs normalized frequency (0.0 to 1.0, where 1.0 = Nyquist or samplingRate/2)
-        // However, SineGen expects frequency in Hertz.
-        f0 = f0 * 24000.0
-
-        if Mel2Wav.debugEnabled {
-            eval(f0)
-            print("VOC F0 (Hz): range=[\(f0.min().item(Float.self)), \(f0.max().item(Float.self))]")
-            print("VOC F0 first 20 (Hz): \(Array(f0[0, 0..<20].asArray(Float.self)))")
+            print("VOC F0: shape=\(f0.shape), range=[\(f0.min().item(Float.self)), \(f0.max().item(Float.self))]")
+            print("VOC F0 first 20: \(Array(f0[0, 0..<20].asArray(Float.self)))")
         }
 
         // Upsample F0

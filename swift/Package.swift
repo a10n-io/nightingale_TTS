@@ -44,6 +44,26 @@ let package = Package(
             name: "SaveDecoderMel",
             targets: ["SaveDecoderMel"]
         ),
+        .executable(
+            name: "CheckFixedNoise",
+            targets: ["CheckFixedNoise"]
+        ),
+        .executable(
+            name: "SaveDecoderIntermediates",
+            targets: ["SaveDecoderIntermediates"]
+        ),
+        .executable(
+            name: "SaveVocoderOutput",
+            targets: ["SaveVocoderOutput"]
+        ),
+        .executable(
+            name: "SaveVocoderCrossValidation",
+            targets: ["SaveVocoderCrossValidation"]
+        ),
+        .executable(
+            name: "TraceVocoderLayers",
+            targets: ["TraceVocoderLayers"]
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.21.0"),
@@ -133,6 +153,36 @@ let package = Package(
             dependencies: ["Nightingale"],
             path: "test_scripts",
             sources: ["SaveDecoderMel.swift"]
+        ),
+        .executableTarget(
+            name: "CheckFixedNoise",
+            dependencies: ["Nightingale"],
+            path: "test_scripts",
+            sources: ["CheckFixedNoise.swift"]
+        ),
+        .executableTarget(
+            name: "SaveDecoderIntermediates",
+            dependencies: ["Nightingale"],
+            path: "test_scripts",
+            sources: ["SaveDecoderIntermediates.swift"]
+        ),
+        .executableTarget(
+            name: "SaveVocoderOutput",
+            dependencies: ["Nightingale"],
+            path: "test_scripts",
+            sources: ["SaveVocoderOutput.swift"]
+        ),
+        .executableTarget(
+            name: "SaveVocoderCrossValidation",
+            dependencies: ["Nightingale"],
+            path: "test_scripts",
+            sources: ["SaveVocoderCrossValidation.swift"]
+        ),
+        .executableTarget(
+            name: "TraceVocoderLayers",
+            dependencies: ["Nightingale"],
+            path: "test_scripts",
+            sources: ["TraceVocoderLayers.swift"]
         ),
         .executableTarget(
             name: "CheckEmbedLinearWeights",
