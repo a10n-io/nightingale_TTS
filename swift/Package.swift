@@ -40,6 +40,10 @@ let package = Package(
             name: "SaveIntermediateEncoderStages",
             targets: ["SaveIntermediateEncoderStages"]
         ),
+        .executable(
+            name: "SaveDecoderMel",
+            targets: ["SaveDecoderMel"]
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.21.0"),
@@ -123,6 +127,12 @@ let package = Package(
             dependencies: ["Nightingale"],
             path: "test_scripts",
             sources: ["SaveIntermediateEncoderStages.swift"]
+        ),
+        .executableTarget(
+            name: "SaveDecoderMel",
+            dependencies: ["Nightingale"],
+            path: "test_scripts",
+            sources: ["SaveDecoderMel.swift"]
         ),
         .executableTarget(
             name: "CheckEmbedLinearWeights",

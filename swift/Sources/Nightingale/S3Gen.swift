@@ -3116,18 +3116,20 @@ public class S3Gen: Module {
         // promptToken: [1, P] history tokens
         // promptFeat: [1, T, 80] history mels (channels-last)
 
-        // 1. Prepare Embedding
-        print("DEBUG S3Gen: Preparing speaker embedding..."); fflush(stdout)
-        var spkEmb = speakerEmb
-        let norm = sqrt(sum(spkEmb * spkEmb, axis: 1, keepDims: true)) + 1e-8
-        spkEmb = spkEmb / norm
-        print("DEBUG S3Gen: Calling spkEmbedAffine..."); fflush(stdout)
-        // WORKAROUND: Manual matmul since Linear.update() doesn't persist transpose
-        let spkCond = matmul(spkEmb, spkEmbedAffine.weight) + spkEmbedAffine.bias! // [1, 80]
+        // 1. Prepare Embedding (use speechEmbMatrix, not speakerEmb!)
+        // speechEmbMatrix is [1, 192] and gets projected to [1, 80] via spkEmbedAffine
+        // speakerEmb [1, 256] is used separately as "finalize" parameter for the decoder
+        print("DEBUG S3Gen: Preparing speech embedding matrix..."); fflush(stdout)
+        var speechEmb = speechEmbMatrix  // [1, 192]
+        let norm = sqrt(sum(speechEmb * speechEmb, axis: 1, keepDims: true)) + 1e-8
+        speechEmb = speechEmb / norm
+        print("DEBUG S3Gen: Calling spkEmbedAffine on speechEmbMatrix [1, 192]..."); fflush(stdout)
+        // Project speech embedding [1, 192] -> [1, 80]
+        let spkCond = matmul(speechEmb, spkEmbedAffine.weight) + spkEmbedAffine.bias! // [1, 80]
         eval(spkCond)
         let spkFlat = spkCond.flattened(); eval(spkFlat)
         let spkFirst10 = Array(spkFlat.asArray(Float.self).prefix(10))
-        print("📊 Swift speaker embedding (after projection):")
+        print("📊 Swift speech embedding (after projection to spkCond):")
         print("   Shape: \(spkCond.shape)")
         print("   Range: [\(spkCond.min().item(Float.self)), \(spkCond.max().item(Float.self))]")
         print("   Mean: \(spkCond.mean().item(Float.self))")
@@ -3416,11 +3418,11 @@ public class S3Gen: Module {
     ) -> (MLXArray, MLXArray) {
         // Same setup as generate() but returns raw mel before vocoder
 
-        // 1. Speaker embedding normalization
-        var spkEmb = speakerEmb
-        let norm = sqrt(sum(spkEmb * spkEmb, axis: 1, keepDims: true)) + 1e-8
-        spkEmb = spkEmb / norm
-        let spkCond = matmul(spkEmb, spkEmbedAffine.weight) + spkEmbedAffine.bias!
+        // 1. Speech embedding normalization (use speechEmbMatrix [1, 192], not speakerEmb [1, 256]!)
+        var speechEmb = speechEmbMatrix
+        let norm = sqrt(sum(speechEmb * speechEmb, axis: 1, keepDims: true)) + 1e-8
+        speechEmb = speechEmb / norm
+        let spkCond = matmul(speechEmb, spkEmbedAffine.weight) + spkEmbedAffine.bias!
 
         // 2. Prepare inputs
         let inputs = concatenated([promptToken, tokens], axis: 1)
