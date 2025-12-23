@@ -13,33 +13,22 @@ let package = Package(
             targets: ["Nightingale"]
         ),
         .executable(
-            name: "TestLoadVoice",
-            targets: ["TestLoadVoice"]
+            name: "GenerateAudio",
+            targets: ["GenerateAudio"]
         ),
         .executable(
-            name: "TestT3Generate",
-            targets: ["TestT3Generate"]
+            name: "CrossValidate",
+            targets: ["CrossValidate"]
         ),
         .executable(
-            name: "TestS3GenVocoding",
-            targets: ["TestS3GenVocoding"]
-        ),
-        .executable(
-            name: "VerifyStep6S3GenEncoder",
-            targets: ["VerifyStep6S3GenEncoder"]
-        ),
-        .executable(
-            name: "VerifyE2ESteps1_7",
-            targets: ["VerifyE2ESteps1_7"]
-        ),
-        .executable(
-            name: "LiveFireTest",
-            targets: ["LiveFireTest"]
+            name: "GenerateTestSentences",
+            targets: ["GenerateTestSentences"]
         ),
     ],
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.21.0"),
         .package(url: "https://github.com/huggingface/swift-transformers", from: "0.1.14"),
+        .package(url: "https://github.com/apple/swift-argument-parser", from: "1.2.0"),
     ],
     targets: [
         .target(
@@ -54,34 +43,19 @@ let package = Package(
             path: "Sources/Nightingale"
         ),
         .executableTarget(
-            name: "TestLoadVoice",
+            name: "GenerateAudio",
             dependencies: ["Nightingale"],
-            path: "test_scripts/TestLoadVoice"
+            path: "test_scripts/GenerateAudio"
         ),
         .executableTarget(
-            name: "TestT3Generate",
+            name: "CrossValidate",
             dependencies: ["Nightingale"],
-            path: "test_scripts/TestT3Generate"
+            path: "test_scripts/CrossValidate"
         ),
         .executableTarget(
-            name: "TestS3GenVocoding",
+            name: "GenerateTestSentences",
             dependencies: ["Nightingale"],
-            path: "test_scripts/TestS3GenVocoding"
-        ),
-        .executableTarget(
-            name: "VerifyStep6S3GenEncoder",
-            dependencies: ["Nightingale"],
-            path: "test_scripts/VerifyStep6S3GenEncoder"
-        ),
-        .executableTarget(
-            name: "VerifyE2ESteps1_7",
-            dependencies: ["Nightingale"],
-            path: "test_scripts/VerifyE2ESteps1_7"
-        ),
-        .executableTarget(
-            name: "LiveFireTest",
-            dependencies: ["Nightingale"],
-            path: "test_scripts/LiveFireTest"
+            path: "test_scripts/GenerateTestSentences"
         ),
     ]
 )

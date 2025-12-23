@@ -1,9 +1,0 @@
-{
-  "voice": "sujano",
-  "sentence_id": "interrogative",
-  "text": "Denk je dat het model de stijgende intonatie aan het einde van deze zin aankan?",
-  "language": "nl",
-  "seed": 42,
-  "temperature": 0.001,
-  "device": "mps"
-}

@@ -22,6 +22,10 @@ public struct T3Config: Codable {
     public let emotionAdv: Bool
     public let ropeScaling: RopeScaling?
 
+    // Special tokens for text input (matches Python t3_config.py)
+    public let startTextToken: Int  // SOT = 255
+    public let stopTextToken: Int   // EOT = 0
+
     public struct RopeScaling: Codable {
         public let factor: Float
         public let highFreqFactor: Float
@@ -57,9 +61,12 @@ public struct T3Config: Codable {
         case usePerceiverResampler = "use_perceiver_resampler"
         case emotionAdv = "emotion_adv"
         case ropeScaling = "rope_scaling"
+        case startTextToken = "start_text_token"
+        case stopTextToken = "stop_text_token"
     }
 
-    /// Default T3 configuration
+    /// Default T3 configuration (English-only, 704 vocab)
+    /// Matches Python's T3Config.english_only()
     public static var `default`: T3Config {
         T3Config(
             modelType: "chatterbox_t3",
@@ -85,7 +92,47 @@ public struct T3Config: Codable {
                 lowFreqFactor: 1.0,
                 originalMaxPositionEmbeddings: 8192,
                 ropeType: "llama3"
-            )
+            ),
+            startTextToken: 255,  // SOT token
+            stopTextToken: 0      // EOT token
         )
+    }
+
+    /// Multilingual T3 configuration (2454 vocab)
+    /// Matches Python's T3Config.multilingual()
+    public static func multilingual() -> T3Config {
+        T3Config(
+            modelType: "chatterbox_t3_multilingual",
+            hiddenSize: 1024,
+            intermediateSize: 4096,
+            numHiddenLayers: 30,
+            numAttentionHeads: 16,
+            numKeyValueHeads: 16,
+            headDim: 64,
+            rmsNormEps: 1e-5,
+            ropeTheta: 500000.0,
+            hiddenAct: "silu",
+            speakerEmbedSize: 256,
+            textVocabSize: 2454,  // Multilingual vocab size
+            speechVocabSize: 8194,
+            maxTextTokens: 2048,
+            maxSpeechTokens: 4096,
+            usePerceiverResampler: true,
+            emotionAdv: true,
+            ropeScaling: RopeScaling(
+                factor: 8.0,
+                highFreqFactor: 4.0,
+                lowFreqFactor: 1.0,
+                originalMaxPositionEmbeddings: 8192,
+                ropeType: "llama3"
+            ),
+            startTextToken: 255,  // SOT token
+            stopTextToken: 0      // EOT token
+        )
+    }
+
+    /// Check if this is a multilingual config
+    public var isMultilingual: Bool {
+        textVocabSize == 2454
     }
 }

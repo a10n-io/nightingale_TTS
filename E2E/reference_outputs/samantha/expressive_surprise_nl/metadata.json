@@ -1,9 +1,0 @@
-{
-  "voice": "samantha",
-  "sentence_id": "expressive_surprise",
-  "text": "Wauw! Ik kan absoluut niet geloven dat het in \u00e9\u00e9n keer werkte!",
-  "language": "nl",
-  "seed": 42,
-  "temperature": 0.001,
-  "device": "mps"
-}

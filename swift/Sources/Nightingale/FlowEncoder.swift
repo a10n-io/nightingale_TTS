@@ -278,18 +278,14 @@ public class PreLookaheadLayer: Module {
 
         super.init()
 
-        // Load weights - Conv weights are [outCh, kernelSize, inCh] in MLX
+        // NOTE: conv1 and conv2 weights are loaded later via ChatterboxEngine.update()
+        // DO NOT transpose weights here to avoid double-transpose bug
+        // Conv1d weights will be transposed once in remapS3Keys() and applied via update()
         if let w = weights["\(prefix).conv1.weight"] {
-            conv1.update(parameters: ModuleParameters.unflattened(["weight": w]))
-        }
-        if let b = weights["\(prefix).conv1.bias"] {
-            conv1.update(parameters: ModuleParameters.unflattened(["bias": b]))
+            print("  Found \(prefix).conv1.weight: \(w.shape) - will be loaded via ChatterboxEngine.update()")
         }
         if let w = weights["\(prefix).conv2.weight"] {
-            conv2.update(parameters: ModuleParameters.unflattened(["weight": w]))
-        }
-        if let b = weights["\(prefix).conv2.bias"] {
-            conv2.update(parameters: ModuleParameters.unflattened(["bias": b]))
+            print("  Found \(prefix).conv2.weight: \(w.shape) - will be loaded via ChatterboxEngine.update()")
         }
     }
 
@@ -332,11 +328,11 @@ public class UpLayer: Module {
 
         super.init()
 
+        // NOTE: conv weights are loaded later via ChatterboxEngine.update()
+        // DO NOT transpose weights here to avoid double-transpose bug
+        // Conv1d weights will be transposed once in remapS3Keys() and applied via update()
         if let w = weights["\(prefix).conv.weight"] {
-            conv.update(parameters: ModuleParameters.unflattened(["weight": w]))
-        }
-        if let b = weights["\(prefix).conv.bias"] {
-            conv.update(parameters: ModuleParameters.unflattened(["bias": b]))
+            print("  Found \(prefix).conv.weight: \(w.shape) - will be loaded via ChatterboxEngine.update()")
         }
     }
 

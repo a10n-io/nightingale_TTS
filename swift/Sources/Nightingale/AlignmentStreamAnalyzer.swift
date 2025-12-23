@@ -185,25 +185,26 @@ public class AlignmentStreamAnalyzer {
         let T = A.shape[0]  // Speech frames
 
         // Find current text position from attention peak
-        let lastRow = A[(T-1)..<T, 0...]  // Last speech frame's attention
-        let curTextPosn = Int(argMax(lastRow, axis: -1).item(Int32.self))
+        // Use RAW (unmasked) attention for position tracking - the masking was causing issues
+        let rawLastRow = chunkSlice[(chunkSlice.shape[0]-1)..<chunkSlice.shape[0], 0...]
+        eval(rawLastRow)
+        let curTextPosn = Int(argMax(rawLastRow, axis: -1).item(Int32.self))
 
-        // DEBUG: Check attention matrix shape and argMax behavior (disabled for clean output)
-        // if currFramePos % 10 == 0 || currFramePos < 3 || (currFramePos >= 70 && currFramePos <= 90) {
-        //     eval(A); eval(lastRow)
-        //     print("🔍 DEBUG Analyzer frame=\(currFramePos):")
-        //     print("   A.shape = \(A.shape) (should be [SpeechFrames, TextTokens])")
-        //     print("   lastRow.shape = \(lastRow.shape)")
-        //     print("   Raw curTextPosn from argMax = \(curTextPosn)")
-        //     print("   Previous textPosition = \(textPosition)")
-        //     print("   Delta = \(curTextPosn - textPosition)")
-        //     // Print max attention value in last row
-        //     let maxAttn = Float(lastRow.max().item(Float.self))
-        //     print("   Max attention value: \(maxAttn)")
-        // }
+        // DEBUG: Check attention matrix shape and argMax behavior
+        if currFramePos % 10 == 0 || currFramePos < 5 {
+            let lastRow = A[(T-1)..<T, 0...]  // Masked for comparison
+            eval(A); eval(lastRow)
+            let maskedPeak = Int(argMax(lastRow, axis: -1).item(Int32.self))
+            let rawMaxAttn = Float(rawLastRow.max().item(Float.self))
+            print("🔍 DEBUG Analyzer frame=\(currFramePos):")
+            print("   curTextPosn=\(curTextPosn) (raw argmax), maskedPeak=\(maskedPeak)")
+            print("   rawMaxAttn=\(String(format: "%.4f", rawMaxAttn))")
+            print("   textPosition=\(textPosition), delta=\(curTextPosn - textPosition)")
+        }
 
-        // Detect discontinuity (jumping too far in text)
-        let discontinuity = !(-4 < curTextPosn - textPosition && curTextPosn - textPosition < 7)
+        // Detect discontinuity (jumping too far in text) - more lenient range
+        // Allow larger forward jumps since attention can skip ahead
+        let discontinuity = !(-4 < curTextPosn - textPosition && curTextPosn - textPosition < 15)
 
         // DEBUG: Log discontinuity triggers (disabled for clean output)
         // if discontinuity && currFramePos > 3 {
@@ -300,12 +301,16 @@ public class AlignmentStreamAnalyzer {
         // LOGIT MODIFICATION
         // ============================================
 
-        // Suppress EOS early: prevent early termination
-        if curTextPosn < S - 3 && S > 5 {
-            var logitsArray = modifiedLogits.asArray(Float.self)
-            logitsArray[eosIdx] = -32768.0  // -2^15
-            modifiedLogits = MLXArray(logitsArray)
-        }
+        // DISABLED: EOS suppression causes issues when textPos tracking isn't working.
+        // For English models, we let the model generate EOS naturally and only use
+        // token repetition detection as a fallback safety mechanism.
+        //
+        // Original code (for multilingual):
+        // if curTextPosn < S - 3 && S > 5 {
+        //     var logitsArray = modifiedLogits.asArray(Float.self)
+        //     logitsArray[eosIdx] = -32768.0  // -2^15
+        //     modifiedLogits = MLXArray(logitsArray)
+        // }
 
         // Force EOS on detected errors
         if longTail || alignmentRepetition || tokenRepetition {
